@@ -23,6 +23,8 @@ const QuoteBuilder = ({ user, onLogout }) => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [departments, setDepartments] = useState([]);
+  const [companies, setCompanies] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [rooms, setRooms] = useState([]);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [systems, setSystems] = useState([]);
