@@ -330,6 +330,7 @@ async def init_db():
                     description TEXT,
                     vendor VARCHAR(255) NOT NULL,
                     department_id INT,
+                    all_departments BOOLEAN DEFAULT FALSE,
                     imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (department_id) REFERENCES departments(id),
                     INDEX idx_vendor (vendor),
