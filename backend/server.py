@@ -128,10 +128,10 @@ class RoomResponse(BaseModel):
 class EquipmentCreate(BaseModel):
     room_id: int
     item_name: str
-    description: Optional[str]
+    description: Optional[str] = None
     quantity: int
     unit_price: float
-    vendor: Optional[str]
+    vendor: Optional[str] = None
 
 class EquipmentResponse(BaseModel):
     id: int
