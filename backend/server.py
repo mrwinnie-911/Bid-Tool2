@@ -263,23 +263,30 @@ async def init_db():
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS quotes (
                     id INT AUTO_INCREMENT PRIMARY KEY,
+                    quote_number VARCHAR(50) UNIQUE NOT NULL,
                     name VARCHAR(255) NOT NULL,
                     client_name VARCHAR(255) NOT NULL,
                     department_id INT NOT NULL,
+                    company_id INT,
+                    contact_id INT,
+                    project_address TEXT,
                     description TEXT,
                     status VARCHAR(50) DEFAULT 'draft',
                     version INT DEFAULT 1,
                     equipment_markup_default DECIMAL(5,2) DEFAULT 20.00,
-                    tax_rate DECIMAL(5,2) DEFAULT 0.00,
-                    tax_enabled BOOLEAN DEFAULT FALSE,
+                    tax_rate DECIMAL(5,2) DEFAULT 8.00,
+                    tax_enabled BOOLEAN DEFAULT TRUE,
                     created_by INT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (department_id) REFERENCES departments(id),
+                    FOREIGN KEY (company_id) REFERENCES companies(id),
+                    FOREIGN KEY (contact_id) REFERENCES contacts(id),
                     FOREIGN KEY (created_by) REFERENCES users(id),
                     INDEX idx_status (status),
                     INDEX idx_department (department_id),
-                    INDEX idx_created_by (created_by)
+                    INDEX idx_created_by (created_by),
+                    INDEX idx_quote_number (quote_number)
                 )
             """)
 
