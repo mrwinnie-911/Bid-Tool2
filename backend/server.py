@@ -229,6 +229,36 @@ async def init_db():
                 )
             """)
 
+            # NEW: Companies table
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS companies (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    address TEXT,
+                    phone VARCHAR(50),
+                    email VARCHAR(255),
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_name (name)
+                )
+            """)
+
+            # NEW: Contacts table
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS contacts (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    company_id INT NOT NULL,
+                    name VARCHAR(255) NOT NULL,
+                    title VARCHAR(255),
+                    phone VARCHAR(50),
+                    email VARCHAR(255),
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                    INDEX idx_company (company_id)
+                )
+            """)
+
             # Quotes table - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS quotes (
