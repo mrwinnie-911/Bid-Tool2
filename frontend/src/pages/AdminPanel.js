@@ -435,9 +435,59 @@ const AdminPanel = ({ user, onLogout }) => {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Edit User Dialog */}
+            <Dialog open={showEditUserDialog} onOpenChange={setShowEditUserDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit User</DialogTitle>
+                  <DialogDescription>Update user role and department</DialogDescription>
+                </DialogHeader>
+                {editingUser && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>Role</Label>
+                      <Select
+                        value={editingUser.role}
+                        onValueChange={(value) => setEditingUser({ ...editingUser, role: value })}
+                      >
+                        <SelectTrigger data-testid="edit-user-role-select">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="estimator">Estimator</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Department (Optional)</Label>
+                      <Select
+                        value={editingUser.department_id}
+                        onValueChange={(value) => setEditingUser({ ...editingUser, department_id: value })}
+                      >
+                        <SelectTrigger data-testid="edit-user-department-select">
+                          <SelectValue placeholder="Select department" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {departments.map((dept) => (
+                            <SelectItem key={dept.id} value={dept.id.toString()}>
+                              {dept.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button data-testid="submit-edit-user-button" onClick={handleUpdateUser} className="w-full">
+                      Update User
+                    </Button>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
-          {/* Vendor Prices Tab */}
+          {/* Vendor Prices Tab */}}
           <TabsContent value="vendor-prices" className="space-y-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
