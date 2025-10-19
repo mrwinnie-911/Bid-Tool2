@@ -535,6 +535,68 @@ async def delete_department(dept_id: int, user = Depends(require_admin), cur = D
     await cur.execute("DELETE FROM departments WHERE id = %s", (dept_id,))
     return {"message": "Department deleted successfully"}
 
+# ============ Company & Contact Routes (NEW) ============
+
+@api_router.post("/companies")
+async def create_company(company: CompanyCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "INSERT INTO companies (name, address, phone, email, notes) VALUES (%s, %s, %s, %s, %s)",
+        (company.name, company.address, company.phone, company.email, company.notes)
+    )
+    return {"id": cur.lastrowid, "message": "Company created successfully"}
+
+@api_router.get("/companies")
+async def get_companies(user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM companies ORDER BY name")
+    return await cur.fetchall()
+
+@api_router.get("/companies/{company_id}")
+async def get_company(company_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM companies WHERE id = %s", (company_id,))
+    company = await cur.fetchone()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
+
+@api_router.put("/companies/{company_id}")
+async def update_company(company_id: int, company: CompanyCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE companies SET name = %s, address = %s, phone = %s, email = %s, notes = %s WHERE id = %s",
+        (company.name, company.address, company.phone, company.email, company.notes, company_id)
+    )
+    return {"message": "Company updated successfully"}
+
+@api_router.post("/contacts")
+async def create_contact(contact: ContactCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "INSERT INTO contacts (company_id, name, title, phone, email, notes) VALUES (%s, %s, %s, %s, %s, %s)",
+        (contact.company_id, contact.name, contact.title, contact.phone, contact.email, contact.notes)
+    )
+    return {"id": cur.lastrowid, "message": "Contact created successfully"}
+
+@api_router.get("/contacts/company/{company_id}")
+async def get_contacts_by_company(company_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM contacts WHERE company_id = %s ORDER BY name", (company_id,))
+    return await cur.fetchall()
+
+@api_router.get("/contacts")
+async def get_all_contacts(user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("""
+        SELECT c.*, co.name as company_name 
+        FROM contacts c
+        LEFT JOIN companies co ON c.company_id = co.id
+        ORDER BY c.name
+    """)
+    return await cur.fetchall()
+
+@api_router.put("/contacts/{contact_id}")
+async def update_contact(contact_id: int, contact: ContactCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE contacts SET name = %s, title = %s, phone = %s, email = %s, notes = %s WHERE id = %s",
+        (contact.name, contact.title, contact.phone, contact.email, contact.notes, contact_id)
+    )
+    return {"message": "Contact updated successfully"}
+
 # ============ Quote Routes ============
 
 @api_router.post("/quotes")
