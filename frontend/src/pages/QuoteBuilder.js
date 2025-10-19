@@ -396,7 +396,7 @@ const QuoteBuilder = ({ user, onLogout }) => {
         headers: { Authorization: `Bearer ${token}` }
       });
       toast.success('Equipment added successfully');
-      setEquipForm({ item_name: '', description: '', quantity: 1, unit_cost: 0, markup_override: null, vendor: '', tax_exempt: false });
+      setEquipForm({ item_name: '', model: '', description: '', quantity: 1, unit_cost: 0, markup_override: null, vendor: '', tax_exempt: false });
       fetchEquipment();
     } catch (error) {
       toast.error('Failed to add equipment');
