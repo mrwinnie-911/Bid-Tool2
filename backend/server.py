@@ -388,15 +388,19 @@ async def init_db():
                 CREATE TABLE IF NOT EXISTS vendor_prices (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     item_name VARCHAR(255) NOT NULL,
+                    model VARCHAR(255),
                     cost DECIMAL(10, 2) NOT NULL,
                     description TEXT,
                     vendor VARCHAR(255) NOT NULL,
                     department_id INT,
                     all_departments BOOLEAN DEFAULT FALSE,
+                    expiration_date DATE,
                     imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     FOREIGN KEY (department_id) REFERENCES departments(id),
                     INDEX idx_vendor (vendor),
-                    INDEX idx_item (item_name)
+                    INDEX idx_item (item_name),
+                    INDEX idx_expiration (expiration_date)
                 )
             """)
 
