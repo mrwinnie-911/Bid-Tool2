@@ -1335,6 +1335,13 @@ async def delete_user(user_id: int, user = Depends(require_admin), cur = Depends
     await cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
     return {"message": "User deleted successfully"}
 
+@api_router.put("/users/{user_id}/password")
+async def reset_user_password(user_id: int, new_password: str, user = Depends(require_admin), cur = Depends(get_db)):
+    """Admin - Reset user password"""
+    password_hash = hash_password(new_password)
+    await cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
+    return {"message": "Password reset successfully"}
+
 # ============ Enhanced User Management ============
 
 @api_router.put("/users/{user_id}")
