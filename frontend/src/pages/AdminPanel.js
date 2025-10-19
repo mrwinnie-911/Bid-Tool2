@@ -549,6 +549,17 @@ const AdminPanel = ({ user, onLogout }) => {
                             </Select>
                           </div>
 
+                          <div className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id="all-departments"
+                              checked={importData.all_departments}
+                              onChange={(e) => setImportData({ ...importData, all_departments: e.target.checked })}
+                              data-testid="all-departments-checkbox"
+                            />
+                            <Label htmlFor="all-departments">Make available to all departments</Label>
+                          </div>
+
                           <div className="border rounded p-4 space-y-3">
                             <h4 className="font-semibold">Column Mapping</h4>
                             
