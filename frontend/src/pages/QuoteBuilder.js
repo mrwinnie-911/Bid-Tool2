@@ -94,6 +94,7 @@ const QuoteBuilder = ({ user, onLogout }) => {
 
   useEffect(() => {
     fetchDepartments();
+    fetchCompanies();
     if (id) {
       fetchQuote();
       fetchRooms();
