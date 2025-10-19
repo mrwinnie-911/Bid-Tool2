@@ -71,26 +71,17 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    role: str
-    department_id: Optional[int]
-    created_at: str
-
 class DepartmentCreate(BaseModel):
     name: str
-
-class DepartmentResponse(BaseModel):
-    id: int
-    name: str
-    created_at: str
 
 class QuoteCreate(BaseModel):
     name: str
     client_name: str
     department_id: int
     description: Optional[str] = None
+    equipment_markup_default: float = 20.0  # Default 20% markup
+    tax_rate: float = 0.0
+    tax_enabled: bool = False
 
 class QuoteUpdate(BaseModel):
     name: Optional[str] = None
@@ -98,129 +89,58 @@ class QuoteUpdate(BaseModel):
     department_id: Optional[int] = None
     description: Optional[str] = None
     status: Optional[str] = None
-
-class QuoteResponse(BaseModel):
-    id: int
-    name: str
-    client_name: str
-    department_id: int
-    department_name: Optional[str]
-    description: Optional[str]
-    status: str
-    version: int
-    created_by: int
-    created_by_username: Optional[str]
-    created_at: str
-    updated_at: str
+    equipment_markup_default: Optional[float] = None
+    tax_rate: Optional[float] = None
+    tax_enabled: Optional[bool] = None
 
 class RoomCreate(BaseModel):
     quote_id: int
     name: str
-    system_type: str
+    quantity: int = 1  # NEW: Room quantity
 
-class RoomResponse(BaseModel):
-    id: int
-    quote_id: int
+class SystemCreate(BaseModel):
+    room_id: int
     name: str
-    system_type: str
-    created_at: str
+    description: Optional[str] = None
 
 class EquipmentCreate(BaseModel):
-    room_id: int
+    system_id: int
     item_name: str
     description: Optional[str] = None
     quantity: int
-    unit_price: float
+    unit_cost: float  # What you pay
+    markup_override: Optional[float] = None  # Override project default
     vendor: Optional[str] = None
-
-class EquipmentResponse(BaseModel):
-    id: int
-    room_id: int
-    item_name: str
-    description: Optional[str]
-    quantity: int
-    unit_price: float
-    vendor: Optional[str]
-    total_price: float
-    created_at: str
+    tax_exempt: bool = False  # NEW: Tax exemption flag
 
 class LaborCreate(BaseModel):
     room_id: int
     role_name: str
-    rate: float
+    cost_rate: float  # What you pay per hour
+    sell_rate: float  # What you charge per hour
     hours: float
-    department_id: Optional[int]
-
-class LaborResponse(BaseModel):
-    id: int
-    room_id: int
-    role_name: str
-    rate: float
-    hours: float
-    department_id: Optional[int]
-    total_cost: float
-    created_at: str
+    department_id: Optional[int] = None
 
 class ServiceCreate(BaseModel):
     room_id: int
     service_name: str
-    cost: float
-    department_id: Optional[int]
-    description: Optional[str]
+    percentage_of_equipment: float  # Percentage of equipment sell price
+    department_id: Optional[int] = None
+    description: Optional[str] = None
 
-class ServiceResponse(BaseModel):
-    id: int
-    room_id: int
-    service_name: str
-    cost: float
-    department_id: Optional[int]
-    description: Optional[str]
-    created_at: str
+class TemplateCreate(BaseModel):
+    name: str
+    department_id: Optional[int] = None
+    services: List[Dict[str, Any]]  # List of service templates
+    labor: List[Dict[str, Any]]  # List of labor templates
+    tax_settings: Dict[str, Any]  # Tax configuration
 
 class VendorPriceCreate(BaseModel):
     item_name: str
-    price: float
+    cost: float  # Changed from price to cost
     description: Optional[str]
     vendor: str
     department_id: Optional[int]
-
-class VendorPriceResponse(BaseModel):
-    id: int
-    item_name: str
-    price: float
-    description: Optional[str]
-    vendor: str
-    department_id: Optional[int]
-    imported_at: str
-
-class MetricCreate(BaseModel):
-    metric_name: str
-    metric_type: str
-    config: Dict[str, Any]
-
-class MetricResponse(BaseModel):
-    id: int
-    user_id: int
-    metric_name: str
-    metric_type: str
-    config: Dict[str, Any]
-    created_at: str
-
-class ApprovalCreate(BaseModel):
-    quote_id: int
-    approver_id: int
-    status: str = 'pending'
-    notes: Optional[str]
-
-class ApprovalResponse(BaseModel):
-    id: int
-    quote_id: int
-    approver_id: int
-    approver_username: Optional[str]
-    status: str
-    notes: Optional[str]
-    created_at: str
-    updated_at: str
 
 # ============ Auth Helper Functions ============
 
@@ -284,7 +204,7 @@ async def init_db():
                 )
             """)
 
-            # Quotes table
+            # Quotes table - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS quotes (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -294,6 +214,9 @@ async def init_db():
                     description TEXT,
                     status VARCHAR(50) DEFAULT 'draft',
                     version INT DEFAULT 1,
+                    equipment_markup_default DECIMAL(5,2) DEFAULT 20.00,
+                    tax_rate DECIMAL(5,2) DEFAULT 0.00,
+                    tax_enabled BOOLEAN DEFAULT FALSE,
                     created_by INT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -305,7 +228,7 @@ async def init_db():
                 )
             """)
 
-            # Quote versions (history)
+            # Quote versions
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS quote_versions (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -320,42 +243,58 @@ async def init_db():
                 )
             """)
 
-            # Rooms table
+            # Rooms table - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS rooms (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     quote_id INT NOT NULL,
                     name VARCHAR(255) NOT NULL,
-                    system_type VARCHAR(255) NOT NULL,
+                    quantity INT DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE,
                     INDEX idx_quote (quote_id)
                 )
             """)
 
-            # Equipment table
+            # NEW: Systems table
             await cur.execute("""
-                CREATE TABLE IF NOT EXISTS equipment (
+                CREATE TABLE IF NOT EXISTS systems (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     room_id INT NOT NULL,
-                    item_name VARCHAR(255) NOT NULL,
+                    name VARCHAR(255) NOT NULL,
                     description TEXT,
-                    quantity INT NOT NULL,
-                    unit_price DECIMAL(10, 2) NOT NULL,
-                    vendor VARCHAR(255),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
                     INDEX idx_room (room_id)
                 )
             """)
 
-            # Labor table
+            # Equipment table - UPDATED
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS equipment (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    system_id INT NOT NULL,
+                    item_name VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    quantity INT NOT NULL,
+                    unit_cost DECIMAL(10, 2) NOT NULL,
+                    markup_override DECIMAL(5, 2) NULL,
+                    vendor VARCHAR(255),
+                    tax_exempt BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (system_id) REFERENCES systems(id) ON DELETE CASCADE,
+                    INDEX idx_system (system_id)
+                )
+            """)
+
+            # Labor table - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS labor (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     room_id INT NOT NULL,
                     role_name VARCHAR(255) NOT NULL,
-                    rate DECIMAL(10, 2) NOT NULL,
+                    cost_rate DECIMAL(10, 2) NOT NULL,
+                    sell_rate DECIMAL(10, 2) NOT NULL,
                     hours DECIMAL(10, 2) NOT NULL,
                     department_id INT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -365,13 +304,13 @@ async def init_db():
                 )
             """)
 
-            # Third-party services table
+            # Services table - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS services (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     room_id INT NOT NULL,
                     service_name VARCHAR(255) NOT NULL,
-                    cost DECIMAL(10, 2) NOT NULL,
+                    percentage_of_equipment DECIMAL(5, 2) NOT NULL,
                     department_id INT,
                     description TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -381,12 +320,12 @@ async def init_db():
                 )
             """)
 
-            # Vendor prices table
+            # Vendor prices - UPDATED
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS vendor_prices (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     item_name VARCHAR(255) NOT NULL,
-                    price DECIMAL(10, 2) NOT NULL,
+                    cost DECIMAL(10, 2) NOT NULL,
                     description TEXT,
                     vendor VARCHAR(255) NOT NULL,
                     department_id INT,
@@ -394,6 +333,23 @@ async def init_db():
                     FOREIGN KEY (department_id) REFERENCES departments(id),
                     INDEX idx_vendor (vendor),
                     INDEX idx_item (item_name)
+                )
+            """)
+
+            # NEW: Templates table
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS templates (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    department_id INT,
+                    services_json JSON NOT NULL,
+                    labor_json JSON NOT NULL,
+                    tax_settings_json JSON NOT NULL,
+                    created_by INT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (department_id) REFERENCES departments(id),
+                    FOREIGN KEY (created_by) REFERENCES users(id),
+                    INDEX idx_department (department_id)
                 )
             """)
 
@@ -437,6 +393,13 @@ async def init_db():
                     ('admin', admin_password, 'admin')
                 )
 
+            # Create default departments if not exist
+            for dept_name in ['AV', 'LV', 'IT']:
+                await cur.execute("SELECT id FROM departments WHERE name = %s", (dept_name,))
+                if not await cur.fetchone():
+                    await cur.execute("INSERT INTO departments (name) VALUES (%s)", (dept_name,))
+
+print("Database initialization script created successfully!")
 # ============ Auth Routes ============
 
 @api_router.post("/auth/register")
@@ -509,15 +472,16 @@ async def delete_department(dept_id: int, user = Depends(require_admin), cur = D
 @api_router.post("/quotes")
 async def create_quote(quote: QuoteCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        "INSERT INTO quotes (name, client_name, department_id, description, created_by) VALUES (%s, %s, %s, %s, %s)",
-        (quote.name, quote.client_name, quote.department_id, quote.description, user['user_id'])
+        """INSERT INTO quotes (name, client_name, department_id, description, equipment_markup_default, 
+           tax_rate, tax_enabled, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (quote.name, quote.client_name, quote.department_id, quote.description, 
+         quote.equipment_markup_default, quote.tax_rate, quote.tax_enabled, user['user_id'])
     )
     quote_id = cur.lastrowid
     return {"id": quote_id, "message": "Quote created successfully"}
 
 @api_router.get("/quotes")
 async def get_quotes(user = Depends(get_current_user), cur = Depends(get_db)):
-    # Filter by department if user is not admin
     if user['role'] == 'admin':
         await cur.execute("""
             SELECT q.*, d.name as department_name, u.username as created_by_username
@@ -554,13 +518,12 @@ async def get_quote(quote_id: int, user = Depends(get_current_user), cur = Depen
 
 @api_router.put("/quotes/{quote_id}")
 async def update_quote(quote_id: int, quote_data: QuoteUpdate, user = Depends(get_current_user), cur = Depends(get_db)):
-    # Get current version
-    await cur.execute("SELECT version, department_id FROM quotes WHERE id = %s", (quote_id,))
+    await cur.execute("SELECT version FROM quotes WHERE id = %s", (quote_id,))
     current = await cur.fetchone()
     if not current:
         raise HTTPException(status_code=404, detail="Quote not found")
     
-    # Save current state to version history
+    # Save version
     await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
     quote_snapshot = await cur.fetchone()
     await cur.execute(
@@ -568,7 +531,7 @@ async def update_quote(quote_id: int, quote_data: QuoteUpdate, user = Depends(ge
         (quote_id, current['version'], json.dumps(quote_snapshot, default=str), user['user_id'])
     )
     
-    # Update quote and increment version
+    # Update quote
     update_fields = []
     values = []
     for field, value in quote_data.model_dump(exclude_unset=True).items():
@@ -590,24 +553,13 @@ async def delete_quote(quote_id: int, user = Depends(get_current_user), cur = De
     await cur.execute("DELETE FROM quotes WHERE id = %s", (quote_id,))
     return {"message": "Quote deleted successfully"}
 
-@api_router.get("/quotes/{quote_id}/versions")
-async def get_quote_versions(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("""
-        SELECT qv.*, u.username as changed_by_username
-        FROM quote_versions qv
-        LEFT JOIN users u ON qv.changed_by = u.id
-        WHERE qv.quote_id = %s
-        ORDER BY qv.version DESC
-    """, (quote_id,))
-    return await cur.fetchall()
-
 # ============ Room Routes ============
 
 @api_router.post("/rooms")
 async def create_room(room: RoomCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        "INSERT INTO rooms (quote_id, name, system_type) VALUES (%s, %s, %s)",
-        (room.quote_id, room.name, room.system_type)
+        "INSERT INTO rooms (quote_id, name, quantity) VALUES (%s, %s, %s)",
+        (room.quote_id, room.name, room.quantity)
     )
     return {"id": cur.lastrowid, "message": "Room created successfully"}
 
@@ -616,58 +568,150 @@ async def get_rooms_by_quote(quote_id: int, user = Depends(get_current_user), cu
     await cur.execute("SELECT * FROM rooms WHERE quote_id = %s", (quote_id,))
     return await cur.fetchall()
 
+@api_router.put("/rooms/{room_id}")
+async def update_room(room_id: int, room: RoomCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE rooms SET name = %s, quantity = %s WHERE id = %s",
+        (room.name, room.quantity, room_id)
+    )
+    return {"message": "Room updated successfully"}
+
 @api_router.delete("/rooms/{room_id}")
 async def delete_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute("DELETE FROM rooms WHERE id = %s", (room_id,))
     return {"message": "Room deleted successfully"}
 
-# ============ Equipment Routes ============
+# ============ System Routes (NEW) ============
+
+@api_router.post("/systems")
+async def create_system(system: SystemCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "INSERT INTO systems (room_id, name, description) VALUES (%s, %s, %s)",
+        (system.room_id, system.name, system.description)
+    )
+    return {"id": cur.lastrowid, "message": "System created successfully"}
+
+@api_router.get("/systems/room/{room_id}")
+async def get_systems_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM systems WHERE room_id = %s", (room_id,))
+    return await cur.fetchall()
+
+@api_router.put("/systems/{system_id}")
+async def update_system(system_id: int, system: SystemCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE systems SET name = %s, description = %s WHERE id = %s",
+        (system.name, system.description, system_id)
+    )
+    return {"message": "System updated successfully"}
+
+@api_router.delete("/systems/{system_id}")
+async def delete_system(system_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM systems WHERE id = %s", (system_id,))
+    return {"message": "System deleted successfully"}
+
+# ============ Equipment Routes (UPDATED) ============
 
 @api_router.post("/equipment")
 async def create_equipment(equip: EquipmentCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        "INSERT INTO equipment (room_id, item_name, description, quantity, unit_price, vendor) VALUES (%s, %s, %s, %s, %s, %s)",
-        (equip.room_id, equip.item_name, equip.description, equip.quantity, equip.unit_price, equip.vendor)
+        """INSERT INTO equipment (system_id, item_name, description, quantity, unit_cost, 
+           markup_override, vendor, tax_exempt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (equip.system_id, equip.item_name, equip.description, equip.quantity, 
+         equip.unit_cost, equip.markup_override, equip.vendor, equip.tax_exempt)
     )
     return {"id": cur.lastrowid, "message": "Equipment created successfully"}
 
-@api_router.get("/equipment/room/{room_id}")
-async def get_equipment_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("SELECT *, (quantity * unit_price) as total_price FROM equipment WHERE room_id = %s", (room_id,))
-    return await cur.fetchall()
+@api_router.get("/equipment/system/{system_id}")
+async def get_equipment_by_system(system_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    # Get quote's default markup
+    await cur.execute("""
+        SELECT q.equipment_markup_default 
+        FROM quotes q
+        JOIN rooms r ON q.id = r.quote_id
+        JOIN systems s ON r.id = s.room_id
+        WHERE s.id = %s
+    """, (system_id,))
+    quote_data = await cur.fetchone()
+    default_markup = float(quote_data['equipment_markup_default']) if quote_data else 20.0
+    
+    await cur.execute("SELECT * FROM equipment WHERE system_id = %s", (system_id,))
+    equipment = await cur.fetchall()
+    
+    # Calculate prices with markup
+    for eq in equipment:
+        markup = float(eq['markup_override']) if eq['markup_override'] else default_markup
+        unit_cost = float(eq['unit_cost'])
+        unit_price = unit_cost * (1 + markup / 100)
+        eq['unit_price'] = round(unit_price, 2)
+        eq['total_cost'] = round(unit_cost * eq['quantity'], 2)
+        eq['total_price'] = round(unit_price * eq['quantity'], 2)
+        eq['margin_dollars'] = round((unit_price - unit_cost) * eq['quantity'], 2)
+        eq['margin_percent'] = round(markup, 2)
+    
+    return equipment
+
+@api_router.put("/equipment/{equip_id}")
+async def update_equipment(equip_id: int, equip: EquipmentCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE equipment SET item_name = %s, description = %s, quantity = %s, unit_cost = %s,
+           markup_override = %s, vendor = %s, tax_exempt = %s WHERE id = %s""",
+        (equip.item_name, equip.description, equip.quantity, equip.unit_cost,
+         equip.markup_override, equip.vendor, equip.tax_exempt, equip_id)
+    )
+    return {"message": "Equipment updated successfully"}
 
 @api_router.delete("/equipment/{equip_id}")
 async def delete_equipment(equip_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute("DELETE FROM equipment WHERE id = %s", (equip_id,))
     return {"message": "Equipment deleted successfully"}
 
-# ============ Labor Routes ============
+# ============ Labor Routes (UPDATED) ============
 
 @api_router.post("/labor")
 async def create_labor(labor: LaborCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        "INSERT INTO labor (room_id, role_name, rate, hours, department_id) VALUES (%s, %s, %s, %s, %s)",
-        (labor.room_id, labor.role_name, labor.rate, labor.hours, labor.department_id)
+        """INSERT INTO labor (room_id, role_name, cost_rate, sell_rate, hours, department_id) 
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (labor.room_id, labor.role_name, labor.cost_rate, labor.sell_rate, labor.hours, labor.department_id)
     )
     return {"id": cur.lastrowid, "message": "Labor created successfully"}
 
 @api_router.get("/labor/room/{room_id}")
 async def get_labor_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("SELECT *, (rate * hours) as total_cost FROM labor WHERE room_id = %s", (room_id,))
-    return await cur.fetchall()
+    await cur.execute("SELECT * FROM labor WHERE room_id = %s", (room_id,))
+    labor = await cur.fetchall()
+    
+    # Calculate totals and margins
+    for lb in labor:
+        lb['total_cost'] = round(float(lb['cost_rate']) * float(lb['hours']), 2)
+        lb['total_price'] = round(float(lb['sell_rate']) * float(lb['hours']), 2)
+        lb['margin_dollars'] = round(lb['total_price'] - lb['total_cost'], 2)
+        lb['margin_percent'] = round((lb['margin_dollars'] / lb['total_cost'] * 100) if lb['total_cost'] > 0 else 0, 2)
+    
+    return labor
+
+@api_router.put("/labor/{labor_id}")
+async def update_labor(labor_id: int, labor: LaborCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE labor SET role_name = %s, cost_rate = %s, sell_rate = %s, hours = %s,
+           department_id = %s WHERE id = %s""",
+        (labor.role_name, labor.cost_rate, labor.sell_rate, labor.hours, labor.department_id, labor_id)
+    )
+    return {"message": "Labor updated successfully"}
 
 @api_router.delete("/labor/{labor_id}")
 async def delete_labor(labor_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute("DELETE FROM labor WHERE id = %s", (labor_id,))
     return {"message": "Labor deleted successfully"}
 
-# ============ Service Routes ============
+# ============ Service Routes (UPDATED) ============
 
 @api_router.post("/services")
 async def create_service(service: ServiceCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        "INSERT INTO services (room_id, service_name, cost, department_id, description) VALUES (%s, %s, %s, %s, %s)",
-        (service.room_id, service.service_name, service.cost, service.department_id, service.description)
+        """INSERT INTO services (room_id, service_name, percentage_of_equipment, department_id, description) 
+           VALUES (%s, %s, %s, %s, %s)""",
+        (service.room_id, service.service_name, service.percentage_of_equipment, service.department_id, service.description)
     )
     return {"id": cur.lastrowid, "message": "Service created successfully"}
 
@@ -676,12 +720,288 @@ async def get_services_by_room(room_id: int, user = Depends(get_current_user), c
     await cur.execute("SELECT * FROM services WHERE room_id = %s", (room_id,))
     return await cur.fetchall()
 
+@api_router.put("/services/{service_id}")
+async def update_service(service_id: int, service: ServiceCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE services SET service_name = %s, percentage_of_equipment = %s, 
+           department_id = %s, description = %s WHERE id = %s""",
+        (service.service_name, service.percentage_of_equipment, service.department_id, service.description, service_id)
+    )
+    return {"message": "Service updated successfully"}
+
 @api_router.delete("/services/{service_id}")
 async def delete_service(service_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute("DELETE FROM services WHERE id = %s", (service_id,))
     return {"message": "Service deleted successfully"}
 
-# ============ Vendor Price Routes ============
+
+# ============ Template Routes (NEW) ============
+
+@api_router.post("/templates")
+async def create_template(template: TemplateCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """INSERT INTO templates (name, department_id, services_json, labor_json, tax_settings_json, created_by)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (template.name, template.department_id, json.dumps(template.services), 
+         json.dumps(template.labor), json.dumps(template.tax_settings), user['user_id'])
+    )
+    return {"id": cur.lastrowid, "message": "Template created successfully"}
+
+@api_router.get("/templates")
+async def get_templates(user = Depends(get_current_user), cur = Depends(get_db)):
+    if user['role'] == 'admin':
+        await cur.execute("SELECT * FROM templates ORDER BY created_at DESC")
+    else:
+        await cur.execute(
+            """SELECT * FROM templates WHERE department_id IS NULL 
+               OR department_id = (SELECT department_id FROM users WHERE id = %s)
+               ORDER BY created_at DESC""",
+            (user['user_id'],)
+        )
+    templates = await cur.fetchall()
+    for t in templates:
+        t['services'] = json.loads(t['services_json'])
+        t['labor'] = json.loads(t['labor_json'])
+        t['tax_settings'] = json.loads(t['tax_settings_json'])
+    return templates
+
+@api_router.get("/templates/{template_id}")
+async def get_template(template_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM templates WHERE id = %s", (template_id,))
+    template = await cur.fetchone()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    template['services'] = json.loads(template['services_json'])
+    template['labor'] = json.loads(template['labor_json'])
+    template['tax_settings'] = json.loads(template['tax_settings_json'])
+    return template
+
+@api_router.delete("/templates/{template_id}")
+async def delete_template(template_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM templates WHERE id = %s", (template_id,))
+    return {"message": "Template deleted successfully"}
+
+@api_router.post("/quotes/{quote_id}/apply-template/{template_id}")
+async def apply_template(quote_id: int, template_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    # Get template
+    await cur.execute("SELECT * FROM templates WHERE id = %s", (template_id,))
+    template = await cur.fetchone()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    services = json.loads(template['services_json'])
+    labor = json.loads(template['labor_json'])
+    tax_settings = json.loads(template['tax_settings_json'])
+    
+    # Update quote tax settings
+    await cur.execute(
+        "UPDATE quotes SET tax_rate = %s, tax_enabled = %s WHERE id = %s",
+        (tax_settings.get('tax_rate', 0), tax_settings.get('tax_enabled', False), quote_id)
+    )
+    
+    return {
+        "message": "Template applied",
+        "services": services,
+        "labor": labor,
+        "tax_settings": tax_settings
+    }
+
+# ============ Financial Breakdown Route (NEW) ============
+
+@api_router.get("/quotes/{quote_id}/financials")
+async def get_quote_financials(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    # Get quote
+    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
+    quote = await cur.fetchone()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    financials = {
+        "rooms": [],
+        "totals": {
+            "equipment_cost": 0,
+            "equipment_price": 0,
+            "equipment_margin": 0,
+            "labor_cost": 0,
+            "labor_price": 0,
+            "labor_margin": 0,
+            "services_cost": 0,
+            "services_price": 0,
+            "subtotal": 0,
+            "tax": 0,
+            "grand_total": 0,
+            "total_margin": 0,
+            "margin_percent": 0
+        }
+    }
+    
+    # Get rooms
+    await cur.execute("SELECT * FROM rooms WHERE quote_id = %s", (quote_id,))
+    rooms = await cur.fetchall()
+    
+    for room in rooms:
+        room_data = {
+            "id": room['id'],
+            "name": room['name'],
+            "quantity": room['quantity'],
+            "systems": [],
+            "labor": [],
+            "services": [],
+            "equipment_cost": 0,
+            "equipment_price": 0,
+            "labor_cost": 0,
+            "labor_price": 0,
+            "services_price": 0,
+            "subtotal": 0,
+            "margin": 0
+        }
+        
+        # Get systems
+        await cur.execute("SELECT * FROM systems WHERE room_id = %s", (room['id'],))
+        systems = await cur.fetchall()
+        
+        for system in systems:
+            system_data = {
+                "id": system['id'],
+                "name": system['name'],
+                "equipment": [],
+                "equipment_cost": 0,
+                "equipment_price": 0,
+                "margin": 0
+            }
+            
+            # Get equipment
+            await cur.execute("SELECT * FROM equipment WHERE system_id = %s", (system['id'],))
+            equipment = await cur.fetchall()
+            
+            for eq in equipment:
+                markup = float(eq['markup_override']) if eq['markup_override'] else float(quote['equipment_markup_default'])
+                unit_cost = float(eq['unit_cost'])
+                unit_price = unit_cost * (1 + markup / 100)
+                total_cost = unit_cost * eq['quantity']
+                total_price = unit_price * eq['quantity']
+                
+                system_data['equipment'].append({
+                    "id": eq['id'],
+                    "item_name": eq['item_name'],
+                    "quantity": eq['quantity'],
+                    "unit_cost": round(unit_cost, 2),
+                    "unit_price": round(unit_price, 2),
+                    "total_cost": round(total_cost, 2),
+                    "total_price": round(total_price, 2),
+                    "margin": round(total_price - total_cost, 2),
+                    "markup_percent": round(markup, 2),
+                    "tax_exempt": eq['tax_exempt']
+                })
+                
+                system_data['equipment_cost'] += total_cost
+                system_data['equipment_price'] += total_price
+            
+            system_data['equipment_cost'] = round(system_data['equipment_cost'], 2)
+            system_data['equipment_price'] = round(system_data['equipment_price'], 2)
+            system_data['margin'] = round(system_data['equipment_price'] - system_data['equipment_cost'], 2)
+            
+            room_data['systems'].append(system_data)
+            room_data['equipment_cost'] += system_data['equipment_cost']
+            room_data['equipment_price'] += system_data['equipment_price']
+        
+        # Get labor
+        await cur.execute("SELECT * FROM labor WHERE room_id = %s", (room['id'],))
+        labor = await cur.fetchall()
+        
+        for lb in labor:
+            total_cost = float(lb['cost_rate']) * float(lb['hours'])
+            total_price = float(lb['sell_rate']) * float(lb['hours'])
+            
+            room_data['labor'].append({
+                "id": lb['id'],
+                "role_name": lb['role_name'],
+                "cost_rate": float(lb['cost_rate']),
+                "sell_rate": float(lb['sell_rate']),
+                "hours": float(lb['hours']),
+                "total_cost": round(total_cost, 2),
+                "total_price": round(total_price, 2),
+                "margin": round(total_price - total_cost, 2)
+            })
+            
+            room_data['labor_cost'] += total_cost
+            room_data['labor_price'] += total_price
+        
+        # Get services (calculated as % of equipment)
+        await cur.execute("SELECT * FROM services WHERE room_id = %s", (room['id'],))
+        services = await cur.fetchall()
+        
+        for svc in services:
+            percentage = float(svc['percentage_of_equipment'])
+            service_price = room_data['equipment_price'] * (percentage / 100)
+            
+            room_data['services'].append({
+                "id": svc['id'],
+                "service_name": svc['service_name'],
+                "percentage": percentage,
+                "calculated_price": round(service_price, 2)
+            })
+            
+            room_data['services_price'] += service_price
+        
+        # Multiply by room quantity
+        room_data['equipment_cost'] = round(room_data['equipment_cost'] * room['quantity'], 2)
+        room_data['equipment_price'] = round(room_data['equipment_price'] * room['quantity'], 2)
+        room_data['labor_cost'] = round(room_data['labor_cost'] * room['quantity'], 2)
+        room_data['labor_price'] = round(room_data['labor_price'] * room['quantity'], 2)
+        room_data['services_price'] = round(room_data['services_price'] * room['quantity'], 2)
+        room_data['subtotal'] = round(room_data['equipment_price'] + room_data['labor_price'] + room_data['services_price'], 2)
+        room_data['margin'] = round((room_data['equipment_price'] - room_data['equipment_cost']) + (room_data['labor_price'] - room_data['labor_cost']) + room_data['services_price'], 2)
+        
+        financials['rooms'].append(room_data)
+        
+        # Add to totals
+        financials['totals']['equipment_cost'] += room_data['equipment_cost']
+        financials['totals']['equipment_price'] += room_data['equipment_price']
+        financials['totals']['labor_cost'] += room_data['labor_cost']
+        financials['totals']['labor_price'] += room_data['labor_price']
+        financials['totals']['services_price'] += room_data['services_price']
+    
+    # Calculate totals
+    financials['totals']['equipment_cost'] = round(financials['totals']['equipment_cost'], 2)
+    financials['totals']['equipment_price'] = round(financials['totals']['equipment_price'], 2)
+    financials['totals']['equipment_margin'] = round(financials['totals']['equipment_price'] - financials['totals']['equipment_cost'], 2)
+    
+    financials['totals']['labor_cost'] = round(financials['totals']['labor_cost'], 2)
+    financials['totals']['labor_price'] = round(financials['totals']['labor_price'], 2)
+    financials['totals']['labor_margin'] = round(financials['totals']['labor_price'] - financials['totals']['labor_cost'], 2)
+    
+    financials['totals']['services_price'] = round(financials['totals']['services_price'], 2)
+    financials['totals']['services_cost'] = 0  # Services are pure margin
+    
+    financials['totals']['subtotal'] = round(
+        financials['totals']['equipment_price'] + 
+        financials['totals']['labor_price'] + 
+        financials['totals']['services_price'], 2
+    )
+    
+    # Calculate tax (only on non-exempt equipment)
+    if quote['tax_enabled']:
+        tax_rate = float(quote['tax_rate'])
+        # For now, tax all equipment. In future, filter by tax_exempt flag
+        taxable_amount = financials['totals']['equipment_price']
+        financials['totals']['tax'] = round(taxable_amount * (tax_rate / 100), 2)
+    
+    financials['totals']['grand_total'] = round(financials['totals']['subtotal'] + financials['totals']['tax'], 2)
+    
+    financials['totals']['total_margin'] = round(
+        financials['totals']['equipment_margin'] + 
+        financials['totals']['labor_margin'] + 
+        financials['totals']['services_price'], 2
+    )
+    
+    total_cost = financials['totals']['equipment_cost'] + financials['totals']['labor_cost']
+    if total_cost > 0:
+        financials['totals']['margin_percent'] = round((financials['totals']['total_margin'] / total_cost) * 100, 2)
+    
+    return financials
+
+# ============ Vendor Prices ============
 
 @api_router.post("/vendor-prices/import")
 async def import_vendor_prices(file: UploadFile = File(...), user = Depends(get_current_user), cur = Depends(get_db)):
@@ -689,7 +1009,6 @@ async def import_vendor_prices(file: UploadFile = File(...), user = Depends(get_
     workbook = openpyxl.load_workbook(io.BytesIO(contents))
     sheet = workbook.active
     
-    # Get headers
     headers = [cell.value for cell in sheet[1]]
     return {"headers": headers, "row_count": sheet.max_row - 1}
 
@@ -712,14 +1031,14 @@ async def import_vendor_prices_mapped(
     
     for row in sheet.iter_rows(min_row=2, values_only=True):
         item_name = row[headers.index(mapping_dict['item_name'])] if mapping_dict.get('item_name') else None
-        price = row[headers.index(mapping_dict['price'])] if mapping_dict.get('price') else None
+        cost = row[headers.index(mapping_dict['price'])] if mapping_dict.get('price') else None  # Changed to 'cost'
         description = row[headers.index(mapping_dict['description'])] if mapping_dict.get('description') and mapping_dict['description'] in headers else None
         
-        if item_name and price:
+        if item_name and cost:
             try:
                 await cur.execute(
-                    "INSERT INTO vendor_prices (item_name, price, description, vendor, department_id) VALUES (%s, %s, %s, %s, %s)",
-                    (str(item_name), float(price), str(description) if description else None, vendor, department_id)
+                    "INSERT INTO vendor_prices (item_name, cost, description, vendor, department_id) VALUES (%s, %s, %s, %s, %s)",
+                    (str(item_name), float(cost), str(description) if description else None, vendor, department_id)
                 )
                 imported_count += 1
             except Exception as e:
@@ -729,7 +1048,7 @@ async def import_vendor_prices_mapped(
 
 @api_router.get("/vendor-prices")
 async def get_vendor_prices(user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("SELECT * FROM vendor_prices ORDER BY imported_at DESC")
+    await cur.execute("SELECT * FROM vendor_prices ORDER BY imported_at DESC LIMIT 100")
     return await cur.fetchall()
 
 @api_router.get("/vendor-prices/search")
@@ -740,41 +1059,26 @@ async def search_vendor_prices(q: str, user = Depends(get_current_user), cur = D
     )
     return await cur.fetchall()
 
-# ============ Dashboard & Metrics Routes ============
+# ============ Dashboard ============
 
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats(user = Depends(get_current_user), cur = Depends(get_db)):
     stats = {}
     
-    # Total quotes by department
-    if user['role'] == 'admin':
-        await cur.execute("""
-            SELECT d.name, COUNT(q.id) as count
-            FROM departments d
-            LEFT JOIN quotes q ON d.id = q.department_id
-            GROUP BY d.id, d.name
-        """)
-    else:
-        await cur.execute("""
-            SELECT d.name, COUNT(q.id) as count
-            FROM departments d
-            LEFT JOIN quotes q ON d.id = q.department_id
-            WHERE d.id = (SELECT department_id FROM users WHERE id = %s)
-            GROUP BY d.id, d.name
-        """, (user['user_id'],))
+    dept_filter = "" if user['role'] == 'admin' else f"WHERE department_id = (SELECT department_id FROM users WHERE id = {user['user_id']})"
+    
+    await cur.execute(f"""
+        SELECT d.name, COUNT(q.id) as count
+        FROM departments d
+        LEFT JOIN quotes q ON d.id = q.department_id
+        {dept_filter if dept_filter else ""}
+        GROUP BY d.id, d.name
+    """)
     stats['quotes_by_department'] = await cur.fetchall()
     
-    # Quote status breakdown
-    dept_filter = "" if user['role'] == 'admin' else f"WHERE department_id = (SELECT department_id FROM users WHERE id = {user['user_id']})"
-    await cur.execute(f"""
-        SELECT status, COUNT(*) as count
-        FROM quotes
-        {dept_filter}
-        GROUP BY status
-    """)
+    await cur.execute(f"SELECT status, COUNT(*) as count FROM quotes {dept_filter} GROUP BY status")
     stats['quotes_by_status'] = await cur.fetchall()
     
-    # Recent quotes (90 days)
     await cur.execute(f"""
         SELECT DATE(created_at) as date, COUNT(*) as count
         FROM quotes
@@ -785,258 +1089,9 @@ async def get_dashboard_stats(user = Depends(get_current_user), cur = Depends(ge
     """)
     stats['recent_quotes'] = await cur.fetchall()
     
-    # Revenue by department (estimated)
-    await cur.execute(f"""
-        SELECT d.name, 
-               SUM(e.quantity * e.unit_price) as equipment_total,
-               SUM(l.rate * l.hours) as labor_total,
-               SUM(s.cost) as services_total
-        FROM departments d
-        LEFT JOIN quotes q ON d.id = q.department_id
-        LEFT JOIN rooms r ON q.id = r.quote_id
-        LEFT JOIN equipment e ON r.id = e.room_id
-        LEFT JOIN labor l ON r.id = l.room_id
-        LEFT JOIN services s ON r.id = s.room_id
-        {"" if user['role'] == 'admin' else f"WHERE d.id = (SELECT department_id FROM users WHERE id = {user['user_id']})"}
-        GROUP BY d.id, d.name
-    """)
-    stats['revenue_by_department'] = await cur.fetchall()
-    
     return stats
 
-@api_router.post("/metrics")
-async def create_metric(metric: MetricCreate, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute(
-        "INSERT INTO metrics (user_id, metric_name, metric_type, config) VALUES (%s, %s, %s, %s)",
-        (user['user_id'], metric.metric_name, metric.metric_type, json.dumps(metric.config))
-    )
-    return {"id": cur.lastrowid, "message": "Metric created successfully"}
-
-@api_router.get("/metrics")
-async def get_metrics(user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("SELECT * FROM metrics WHERE user_id = %s", (user['user_id'],))
-    metrics = await cur.fetchall()
-    for m in metrics:
-        if isinstance(m['config'], str):
-            m['config'] = json.loads(m['config'])
-    return metrics
-
-@api_router.delete("/metrics/{metric_id}")
-async def delete_metric(metric_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("DELETE FROM metrics WHERE id = %s AND user_id = %s", (metric_id, user['user_id']))
-    return {"message": "Metric deleted successfully"}
-
-# ============ Approval Routes ============
-
-@api_router.post("/approvals")
-async def create_approval(approval: ApprovalCreate, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute(
-        "INSERT INTO approvals (quote_id, approver_id, status, notes) VALUES (%s, %s, %s, %s)",
-        (approval.quote_id, approval.approver_id, approval.status, approval.notes)
-    )
-    return {"id": cur.lastrowid, "message": "Approval request created"}
-
-@api_router.get("/approvals/quote/{quote_id}")
-async def get_approvals_by_quote(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("""
-        SELECT a.*, u.username as approver_username
-        FROM approvals a
-        LEFT JOIN users u ON a.approver_id = u.id
-        WHERE a.quote_id = %s
-        ORDER BY a.created_at DESC
-    """, (quote_id,))
-    return await cur.fetchall()
-
-@api_router.put("/approvals/{approval_id}")
-async def update_approval(approval_id: int, status: str, notes: Optional[str] = None, user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute(
-        "UPDATE approvals SET status = %s, notes = %s WHERE id = %s",
-        (status, notes, approval_id)
-    )
-    return {"message": "Approval updated successfully"}
-
-# ============ PDF Generation ============
-
-@api_router.get("/quotes/{quote_id}/pdf")
-async def generate_quote_pdf(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
-    # Get quote details
-    await cur.execute("""
-        SELECT q.*, d.name as department_name, u.username as created_by_username
-        FROM quotes q
-        LEFT JOIN departments d ON q.department_id = d.id
-        LEFT JOIN users u ON q.created_by = u.id
-        WHERE q.id = %s
-    """, (quote_id,))
-    quote = await cur.fetchone()
-    if not quote:
-        raise HTTPException(status_code=404, detail="Quote not found")
-    
-    # Get rooms with equipment, labor, services
-    await cur.execute("SELECT * FROM rooms WHERE quote_id = %s", (quote_id,))
-    rooms = await cur.fetchall()
-    
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter)
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    # Title
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=30,
-        alignment=TA_CENTER
-    )
-    elements.append(Paragraph(f"Quote: {quote['name']}", title_style))
-    elements.append(Spacer(1, 0.2*inch))
-    
-    # Quote info
-    info_data = [
-        ['Client:', quote['client_name']],
-        ['Department:', quote['department_name']],
-        ['Status:', quote['status'].upper()],
-        ['Version:', str(quote['version'])],
-        ['Created By:', quote['created_by_username']],
-        ['Date:', str(quote['created_at'])],
-    ]
-    if quote['description']:
-        info_data.append(['Description:', quote['description']])
-    
-    info_table = Table(info_data, colWidths=[2*inch, 4*inch])
-    info_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e5e7eb')),
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    elements.append(info_table)
-    elements.append(Spacer(1, 0.4*inch))
-    
-    # Room breakdown
-    total_equipment = 0
-    total_labor = 0
-    total_services = 0
-    
-    for room in rooms:
-        elements.append(Paragraph(f"Room: {room['name']} ({room['system_type']})", styles['Heading2']))
-        elements.append(Spacer(1, 0.1*inch))
-        
-        # Equipment
-        await cur.execute("SELECT * FROM equipment WHERE room_id = %s", (room['id'],))
-        equipment = await cur.fetchall()
-        if equipment:
-            elements.append(Paragraph("Equipment:", styles['Heading3']))
-            equip_data = [['Item', 'Qty', 'Unit Price', 'Total']]
-            for eq in equipment:
-                total = float(eq['quantity']) * float(eq['unit_price'])
-                total_equipment += total
-                equip_data.append([
-                    eq['item_name'],
-                    str(eq['quantity']),
-                    f"${eq['unit_price']:.2f}",
-                    f"${total:.2f}"
-                ])
-            
-            equip_table = Table(equip_data, colWidths=[3*inch, 0.8*inch, 1*inch, 1*inch])
-            equip_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ]))
-            elements.append(equip_table)
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Labor
-        await cur.execute("SELECT * FROM labor WHERE room_id = %s", (room['id'],))
-        labor = await cur.fetchall()
-        if labor:
-            elements.append(Paragraph("Labor:", styles['Heading3']))
-            labor_data = [['Role', 'Hours', 'Rate', 'Total']]
-            for lb in labor:
-                total = float(lb['hours']) * float(lb['rate'])
-                total_labor += total
-                labor_data.append([
-                    lb['role_name'],
-                    str(lb['hours']),
-                    f"${lb['rate']:.2f}/hr",
-                    f"${total:.2f}"
-                ])
-            
-            labor_table = Table(labor_data, colWidths=[3*inch, 0.8*inch, 1*inch, 1*inch])
-            labor_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ]))
-            elements.append(labor_table)
-            elements.append(Spacer(1, 0.2*inch))
-        
-        # Services
-        await cur.execute("SELECT * FROM services WHERE room_id = %s", (room['id'],))
-        services = await cur.fetchall()
-        if services:
-            elements.append(Paragraph("Third-Party Services:", styles['Heading3']))
-            service_data = [['Service', 'Cost']]
-            for sv in services:
-                total_services += float(sv['cost'])
-                service_data.append([sv['service_name'], f"${sv['cost']:.2f}"])
-            
-            service_table = Table(service_data, colWidths=[4*inch, 1.5*inch])
-            service_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f59e0b')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-            ]))
-            elements.append(service_table)
-            elements.append(Spacer(1, 0.2*inch))
-        
-        elements.append(Spacer(1, 0.3*inch))
-    
-    # Total summary
-    grand_total = total_equipment + total_labor + total_services
-    summary_data = [
-        ['Equipment Total:', f"${total_equipment:.2f}"],
-        ['Labor Total:', f"${total_labor:.2f}"],
-        ['Services Total:', f"${total_services:.2f}"],
-        ['GRAND TOTAL:', f"${grand_total:.2f}"]
-    ]
-    
-    summary_table = Table(summary_data, colWidths=[4*inch, 2*inch])
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#1e40af')),
-        ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
-        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -2), 11),
-        ('FONTSIZE', (0, -1), (-1, -1), 14),
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-    ]))
-    elements.append(summary_table)
-    
-    doc.build(elements)
-    buffer.seek(0)
-    
-    return StreamingResponse(
-        buffer,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=quote_{quote_id}.pdf"}
-    )
-
-# ============ User Management (Admin) ============
+# ============ User Management ============
 
 @api_router.get("/users")
 async def get_users(user = Depends(require_admin), cur = Depends(get_db)):
@@ -1047,24 +1102,6 @@ async def get_users(user = Depends(require_admin), cur = Depends(get_db)):
         ORDER BY u.created_at DESC
     """)
     return await cur.fetchall()
-
-@api_router.put("/users/{user_id}")
-async def update_user(user_id: int, update_data: dict, user = Depends(require_admin), cur = Depends(get_db)):
-    fields = []
-    values = []
-    
-    if 'role' in update_data:
-        fields.append('role = %s')
-        values.append(update_data['role'])
-    if 'department_id' in update_data:
-        fields.append('department_id = %s')
-        values.append(update_data['department_id'])
-    
-    if fields:
-        values.append(user_id)
-        await cur.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = %s", tuple(values))
-    
-    return {"message": "User updated successfully"}
 
 @api_router.delete("/users/{user_id}")
 async def delete_user(user_id: int, user = Depends(require_admin), cur = Depends(get_db)):
@@ -1091,7 +1128,7 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def startup():
     await init_db()
-    logger.info("Database initialized")
+    logger.info("Database initialized with enhanced schema")
 
 @app.on_event("shutdown")
 async def shutdown():
