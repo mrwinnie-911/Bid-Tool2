@@ -1019,34 +1019,60 @@ async def import_vendor_prices_mapped(
     file: UploadFile = File(...),
     mapping: str = Form(...),
     vendor: str = Form(...),
-    department_id: Optional[int] = Form(None),
+    department_id: Optional[str] = Form(None),
+    all_departments: str = Form("false"),
     user = Depends(get_current_user),
     cur = Depends(get_db)
 ):
-    mapping_dict = json.loads(mapping)
-    contents = await file.read()
-    workbook = openpyxl.load_workbook(io.BytesIO(contents))
-    sheet = workbook.active
-    
-    headers = [cell.value for cell in sheet[1]]
-    imported_count = 0
-    
-    for row in sheet.iter_rows(min_row=2, values_only=True):
-        item_name = row[headers.index(mapping_dict['item_name'])] if mapping_dict.get('item_name') else None
-        cost = row[headers.index(mapping_dict['price'])] if mapping_dict.get('price') else None  # Changed to 'cost'
-        description = row[headers.index(mapping_dict['description'])] if mapping_dict.get('description') and mapping_dict['description'] in headers else None
+    try:
+        mapping_dict = json.loads(mapping)
+        all_depts = all_departments.lower() == "true"
+        dept_id = int(department_id) if department_id and department_id != "null" else None
         
-        if item_name and cost:
+        contents = await file.read()
+        workbook = openpyxl.load_workbook(io.BytesIO(contents))
+        sheet = workbook.active
+        
+        headers = [cell.value for cell in sheet[1]]
+        imported_count = 0
+        errors = []
+        
+        for row_num, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             try:
-                await cur.execute(
-                    "INSERT INTO vendor_prices (item_name, cost, description, vendor, department_id) VALUES (%s, %s, %s, %s, %s)",
-                    (str(item_name), float(cost), str(description) if description else None, vendor, department_id)
-                )
-                imported_count += 1
+                # Get mapped columns
+                item_name = None
+                cost = None
+                description = None
+                
+                if mapping_dict.get('item_name') and mapping_dict['item_name'] in headers:
+                    item_name = row[headers.index(mapping_dict['item_name'])]
+                
+                if mapping_dict.get('price') and mapping_dict['price'] in headers:
+                    cost = row[headers.index(mapping_dict['price'])]
+                
+                if mapping_dict.get('description') and mapping_dict['description'] in headers:
+                    description = row[headers.index(mapping_dict['description'])]
+                
+                if item_name and cost:
+                    await cur.execute(
+                        """INSERT INTO vendor_prices (item_name, cost, description, vendor, department_id, all_departments) 
+                           VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (str(item_name), float(cost), str(description) if description else None, 
+                         vendor, dept_id, all_depts)
+                    )
+                    imported_count += 1
             except Exception as e:
-                logging.error(f"Error importing row: {e}")
-    
-    return {"message": f"Imported {imported_count} items successfully"}
+                errors.append(f"Row {row_num}: {str(e)}")
+                logging.error(f"Error importing row {row_num}: {e}")
+        
+        result = {"message": f"Imported {imported_count} items successfully"}
+        if errors:
+            result['errors'] = errors[:10]  # Return first 10 errors
+        
+        return result
+    except Exception as e:
+        logging.error(f"Import error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
 @api_router.get("/vendor-prices")
 async def get_vendor_prices(user = Depends(get_current_user), cur = Depends(get_db)):
