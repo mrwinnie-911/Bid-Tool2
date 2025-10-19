@@ -188,6 +188,7 @@ const AdminPanel = ({ user, onLogout }) => {
     if (importData.department_id) {
       formData.append('department_id', importData.department_id);
     }
+    formData.append('all_departments', importData.all_departments.toString());
 
     try {
       const token = localStorage.getItem('token');
@@ -204,12 +205,40 @@ const AdminPanel = ({ user, onLogout }) => {
         file: null,
         vendor: '',
         department_id: '',
+        all_departments: false,
         headers: [],
         mapping: { item_name: '', price: '', description: '' }
       });
       fetchVendorPrices();
     } catch (error) {
-      toast.error('Failed to import prices');
+      toast.error(error.response?.data?.detail || 'Failed to import prices');
+    }
+  };
+
+  const handleEditUser = (userToEdit) => {
+    setEditingUser({
+      id: userToEdit.id,
+      role: userToEdit.role,
+      department_id: userToEdit.department_id?.toString() || ''
+    });
+    setShowEditUserDialog(true);
+  };
+
+  const handleUpdateUser = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put(`${API}/users/${editingUser.id}`, {
+        role: editingUser.role,
+        department_id: editingUser.department_id ? parseInt(editingUser.department_id) : null
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      toast.success('User updated successfully');
+      setShowEditUserDialog(false);
+      setEditingUser(null);
+      fetchUsers();
+    } catch (error) {
+      toast.error('Failed to update user');
     }
   };
 
