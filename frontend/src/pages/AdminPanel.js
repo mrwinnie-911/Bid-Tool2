@@ -410,16 +410,26 @@ const AdminPanel = ({ user, onLogout }) => {
                           Role: {u.role} | Department: {u.department_name || 'None'}
                         </div>
                       </div>
-                      {u.role !== 'admin' && (
+                      <div className="flex gap-2">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleDeleteUser(u.id)}
-                          data-testid={`delete-user-${u.id}`}
+                          onClick={() => handleEditUser(u)}
+                          data-testid={`edit-user-${u.id}`}
                         >
-                          <Trash2 className="w-4 h-4 text-red-500" />
+                          Edit
                         </Button>
-                      )}
+                        {u.role !== 'admin' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteUser(u.id)}
+                            data-testid={`delete-user-${u.id}`}
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
