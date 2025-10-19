@@ -66,6 +66,7 @@ const QuoteBuilder = ({ user, onLogout }) => {
   // Equipment form
   const [equipForm, setEquipForm] = useState({
     item_name: '',
+    model: '',
     description: '',
     quantity: 1,
     unit_cost: 0,
