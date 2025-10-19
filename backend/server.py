@@ -761,9 +761,9 @@ async def delete_system(system_id: int, user = Depends(get_current_user), cur = 
 @api_router.post("/equipment")
 async def create_equipment(equip: EquipmentCreate, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute(
-        """INSERT INTO equipment (system_id, item_name, description, quantity, unit_cost, 
-           markup_override, vendor, tax_exempt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-        (equip.system_id, equip.item_name, equip.description, equip.quantity, 
+        """INSERT INTO equipment (system_id, item_name, model, description, quantity, unit_cost, 
+           markup_override, vendor, tax_exempt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (equip.system_id, equip.item_name, equip.model, equip.description, equip.quantity, 
          equip.unit_cost, equip.markup_override, equip.vendor, equip.tax_exempt)
     )
     return {"id": cur.lastrowid, "message": "Equipment created successfully"}
