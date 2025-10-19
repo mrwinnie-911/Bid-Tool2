@@ -1,473 +1,56 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, UploadFile, File, Form
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from dotenv import load_dotenv
+import io
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import aiomysql
+import openpyxl
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
-import aiomysql
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone, timedelta
-import bcrypt
-import jwt
-import json
-import openpyxl
-import io
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+from .app.config import get_settings
+from .app.database import close_pool, get_db
+from .app.initialization import init_db, record_quote_snapshot
+from .app.schemas import (
+    CompanyCreate,
+    ContactCreate,
+    DepartmentCreate,
+    EquipmentCreate,
+    LaborCreate,
+    PasswordResetRequest,
+    QuoteCreate,
+    QuoteUpdate,
+    RoomCreate,
+    ServiceCreate,
+    SystemCreate,
+    TemplateCreate,
+    UserCreate,
+    UserLogin,
+    VendorPriceCreate,
+)
+from .app.security import (
+    create_token,
+    get_current_user,
+    hash_password,
+    require_admin,
+    security,
+    verify_password,
+)
 
-# MySQL connection pool
-pool = None
-
-async def get_db_pool():
-    global pool
-    if pool is None:
-        pool = await aiomysql.create_pool(
-            host=os.environ.get('MYSQL_HOST', 'localhost'),
-            port=int(os.environ.get('MYSQL_PORT', '3306')),
-            user=os.environ.get('MYSQL_USER', 'root'),
-            password=os.environ.get('MYSQL_PASSWORD', ''),
-            db=os.environ.get('MYSQL_DATABASE', 'avlv_quotes'),
-            autocommit=True,
-            minsize=1,
-            maxsize=10
-        )
-    return pool
-
-async def get_db():
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.cursor(aiomysql.DictCursor) as cur:
-            yield cur
+settings = get_settings()
 
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-security = HTTPBearer()
-
-JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secret-key-change-in-production')
-JWT_ALGORITHM = 'HS256'
-JWT_EXPIRATION_HOURS = 24
-
-# ============ Models ============
-
-class UserCreate(BaseModel):
-    username: str
-    password: str
-    role: str = 'estimator'
-    department_id: Optional[int] = None
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class DepartmentCreate(BaseModel):
-    name: str
-
-class QuoteCreate(BaseModel):
-    name: str
-    client_name: str
-    department_id: int
-    company_id: Optional[int] = None  # NEW: Company
-    contact_id: Optional[int] = None  # NEW: Point of Contact
-    project_address: Optional[str] = None  # NEW: Project address
-    description: Optional[str] = None
-    equipment_markup_default: float = 20.0  # Default 20% markup
-    tax_rate: float = 8.0  # NEW: Default 8%
-    tax_enabled: bool = True  # NEW: Enabled by default
-
-class QuoteUpdate(BaseModel):
-    name: Optional[str] = None
-    client_name: Optional[str] = None
-    department_id: Optional[int] = None
-    company_id: Optional[int] = None
-    contact_id: Optional[int] = None
-    project_address: Optional[str] = None
-    description: Optional[str] = None
-    status: Optional[str] = None
-    equipment_markup_default: Optional[float] = None
-    tax_rate: Optional[float] = None
-    tax_enabled: Optional[bool] = None
-
-class RoomCreate(BaseModel):
-    quote_id: int
-    name: str
-    quantity: int = 1  # NEW: Room quantity
-
-class SystemCreate(BaseModel):
-    room_id: int
-    name: str
-    description: Optional[str] = None
-
-class EquipmentCreate(BaseModel):
-    system_id: int
-    item_name: str
-    model: Optional[str] = None  # NEW: Model number
-    description: Optional[str] = None
-    quantity: int
-    unit_cost: float  # What you pay
-    markup_override: Optional[float] = None  # Override project default
-    vendor: Optional[str] = None
-    tax_exempt: bool = False  # NEW: Tax exemption flag
-
-class LaborCreate(BaseModel):
-    room_id: int
-    role_name: str
-    cost_rate: float  # What you pay per hour
-    sell_rate: float  # What you charge per hour
-    hours: float
-    department_id: Optional[int] = None
-
-class ServiceCreate(BaseModel):
-    room_id: int
-    service_name: str
-    percentage_of_equipment: float  # Percentage of equipment sell price
-    department_id: Optional[int] = None
-    description: Optional[str] = None
-
-class TemplateCreate(BaseModel):
-    name: str
-    department_id: Optional[int] = None
-    services: List[Dict[str, Any]]  # List of service templates
-    labor: List[Dict[str, Any]]  # List of labor templates
-    tax_settings: Dict[str, Any]  # Tax configuration
-
-class VendorPriceCreate(BaseModel):
-    item_name: str
-    model: Optional[str] = None  # NEW: Model number
-    cost: float
-    description: Optional[str] = None
-    vendor: str
-    department_id: Optional[int] = None
-    all_departments: bool = False
-    expiration_date: Optional[str] = None  # NEW: Price expiration
-
-class CompanyCreate(BaseModel):
-    name: str
-    address: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    notes: Optional[str] = None
-
-class ContactCreate(BaseModel):
-    company_id: int
-    name: str
-    title: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    notes: Optional[str] = None
-
-# ============ Auth Helper Functions ============
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-
-def create_token(user_id: int, username: str, role: str) -> str:
-    payload = {
-        'user_id': user_id,
-        'username': username,
-        'role': role,
-        'exp': datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    try:
-        token = credentials.credentials
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-async def require_admin(user = Depends(get_current_user)):
-    if user['role'] != 'admin':
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return user
-
-# ============ Database Initialization ============
-
-async def init_db():
-    pool = await get_db_pool()
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            # Users table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    username VARCHAR(255) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    role VARCHAR(50) NOT NULL,
-                    department_id INT,
-                    azure_enabled BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_username (username),
-                    INDEX idx_role (role)
-                )
-            """)
-
-            # Departments table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS departments (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(255) UNIQUE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
-            # NEW: Companies table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS companies (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    address TEXT,
-                    phone VARCHAR(50),
-                    email VARCHAR(255),
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    INDEX idx_name (name)
-                )
-            """)
-
-            # NEW: Contacts table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS contacts (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    company_id INT NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    title VARCHAR(255),
-                    phone VARCHAR(50),
-                    email VARCHAR(255),
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
-                    INDEX idx_company (company_id)
-                )
-            """)
-
-            # Quotes table - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS quotes (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    quote_number VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    client_name VARCHAR(255) NOT NULL,
-                    department_id INT NOT NULL,
-                    company_id INT,
-                    contact_id INT,
-                    project_address TEXT,
-                    description TEXT,
-                    status VARCHAR(50) DEFAULT 'draft',
-                    version INT DEFAULT 1,
-                    equipment_markup_default DECIMAL(5,2) DEFAULT 20.00,
-                    tax_rate DECIMAL(5,2) DEFAULT 8.00,
-                    tax_enabled BOOLEAN DEFAULT TRUE,
-                    created_by INT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (department_id) REFERENCES departments(id),
-                    FOREIGN KEY (company_id) REFERENCES companies(id),
-                    FOREIGN KEY (contact_id) REFERENCES contacts(id),
-                    FOREIGN KEY (created_by) REFERENCES users(id),
-                    INDEX idx_status (status),
-                    INDEX idx_department (department_id),
-                    INDEX idx_created_by (created_by),
-                    INDEX idx_quote_number (quote_number)
-                )
-            """)
-
-            # Quote versions
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS quote_versions (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    quote_id INT NOT NULL,
-                    version INT NOT NULL,
-                    data JSON NOT NULL,
-                    changed_by INT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE,
-                    FOREIGN KEY (changed_by) REFERENCES users(id),
-                    INDEX idx_quote_version (quote_id, version)
-                )
-            """)
-
-            # Rooms table - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS rooms (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    quote_id INT NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    quantity INT DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE,
-                    INDEX idx_quote (quote_id)
-                )
-            """)
-
-            # NEW: Systems table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS systems (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    room_id INT NOT NULL,
-                    name VARCHAR(255) NOT NULL,
-                    description TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
-                    INDEX idx_room (room_id)
-                )
-            """)
-
-            # Equipment table - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS equipment (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    system_id INT NOT NULL,
-                    item_name VARCHAR(255) NOT NULL,
-                    model VARCHAR(255),
-                    description TEXT,
-                    quantity INT NOT NULL,
-                    unit_cost DECIMAL(10, 2) NOT NULL,
-                    markup_override DECIMAL(5, 2) NULL,
-                    vendor VARCHAR(255),
-                    tax_exempt BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (system_id) REFERENCES systems(id) ON DELETE CASCADE,
-                    INDEX idx_system (system_id)
-                )
-            """)
-
-            # Labor table - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS labor (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    room_id INT NOT NULL,
-                    role_name VARCHAR(255) NOT NULL,
-                    cost_rate DECIMAL(10, 2) NOT NULL,
-                    sell_rate DECIMAL(10, 2) NOT NULL,
-                    hours DECIMAL(10, 2) NOT NULL,
-                    department_id INT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
-                    FOREIGN KEY (department_id) REFERENCES departments(id),
-                    INDEX idx_room (room_id)
-                )
-            """)
-
-            # Services table - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS services (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    room_id INT NOT NULL,
-                    service_name VARCHAR(255) NOT NULL,
-                    percentage_of_equipment DECIMAL(5, 2) NOT NULL,
-                    department_id INT,
-                    description TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE,
-                    FOREIGN KEY (department_id) REFERENCES departments(id),
-                    INDEX idx_room (room_id)
-                )
-            """)
-
-            # Vendor prices - UPDATED
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS vendor_prices (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    item_name VARCHAR(255) NOT NULL,
-                    model VARCHAR(255),
-                    cost DECIMAL(10, 2) NOT NULL,
-                    description TEXT,
-                    vendor VARCHAR(255) NOT NULL,
-                    department_id INT,
-                    all_departments BOOLEAN DEFAULT FALSE,
-                    expiration_date DATE,
-                    imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (department_id) REFERENCES departments(id),
-                    INDEX idx_vendor (vendor),
-                    INDEX idx_item (item_name),
-                    INDEX idx_expiration (expiration_date)
-                )
-            """)
-
-            # NEW: Templates table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS templates (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    department_id INT,
-                    services_json JSON NOT NULL,
-                    labor_json JSON NOT NULL,
-                    tax_settings_json JSON NOT NULL,
-                    created_by INT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (department_id) REFERENCES departments(id),
-                    FOREIGN KEY (created_by) REFERENCES users(id),
-                    INDEX idx_department (department_id)
-                )
-            """)
-
-            # Metrics table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS metrics (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    user_id INT NOT NULL,
-                    metric_name VARCHAR(255) NOT NULL,
-                    metric_type VARCHAR(100) NOT NULL,
-                    config JSON NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                    INDEX idx_user (user_id)
-                )
-            """)
-
-            # Approvals table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS approvals (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    quote_id INT NOT NULL,
-                    approver_id INT NOT NULL,
-                    status VARCHAR(50) DEFAULT 'pending',
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE,
-                    FOREIGN KEY (approver_id) REFERENCES users(id),
-                    INDEX idx_quote (quote_id),
-                    INDEX idx_status (status)
-                )
-            """)
-
-            # Create default admin user if not exists
-            await cur.execute("SELECT id FROM users WHERE username = 'admin'")
-            if not await cur.fetchone():
-                admin_password = hash_password('admin123')
-                await cur.execute(
-                    "INSERT INTO users (username, password_hash, role) VALUES (%s, %s, %s)",
-                    ('admin', admin_password, 'admin')
-                )
-
-            # Create default departments if not exist
-            for dept_name in ['AV', 'LV', 'IT']:
-                await cur.execute("SELECT id FROM departments WHERE name = %s", (dept_name,))
-                if not await cur.fetchone():
-                    await cur.execute("INSERT INTO departments (name) VALUES (%s)", (dept_name,))
-
-print("Database initialization script created successfully!")
 # ============ Auth Routes ============
 
 @api_router.post("/auth/register")
@@ -601,11 +184,11 @@ async def update_contact(contact_id: int, contact: ContactCreate, user = Depends
 
 @api_router.post("/quotes")
 async def create_quote(quote: QuoteCreate, user = Depends(get_current_user), cur = Depends(get_db)):
-    # Generate quote number
-    await cur.execute("SELECT MAX(id) as max_id FROM quotes")
-    result = await cur.fetchone()
-    next_id = (result['max_id'] or 0) + 1
-    quote_number = f"Q-{datetime.now().year}-{next_id:05d}"
+    # Generate a collision-resistant quote number using dedicated sequence table
+    current_year = datetime.now().year
+    await cur.execute("INSERT INTO quote_numbers (year) VALUES (%s)", (current_year,))
+    sequence_id = cur.lastrowid
+    quote_number = f"Q-{current_year}-{sequence_id:05d}"
     
     await cur.execute(
         """INSERT INTO quotes (quote_number, name, client_name, department_id, company_id, contact_id,
@@ -670,13 +253,7 @@ async def update_quote(quote_id: int, quote_data: QuoteUpdate, user = Depends(ge
     if not current:
         raise HTTPException(status_code=404, detail="Quote not found")
     
-    # Save version
-    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
-    quote_snapshot = await cur.fetchone()
-    await cur.execute(
-        "INSERT INTO quote_versions (quote_id, version, data, changed_by) VALUES (%s, %s, %s, %s)",
-        (quote_id, current['version'], json.dumps(quote_snapshot, default=str), user['user_id'])
-    )
+    await record_quote_snapshot(cur, quote_id, user['user_id'])
     
     # Update quote
     update_fields = []
@@ -1290,32 +867,52 @@ async def search_vendor_prices(q: str, user = Depends(get_current_user), cur = D
 
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats(user = Depends(get_current_user), cur = Depends(get_db)):
-    stats = {}
-    
-    dept_filter = "" if user['role'] == 'admin' else f"WHERE department_id = (SELECT department_id FROM users WHERE id = {user['user_id']})"
-    
-    await cur.execute(f"""
+    stats: Dict[str, Any] = {}
+
+    is_admin = user['role'] == 'admin'
+    department_filter = ""
+    params: List[Any] = []
+    if not is_admin:
+        department_filter = "WHERE q.department_id = (SELECT department_id FROM users WHERE id = %s)"
+        params.append(user['user_id'])
+
+    query_by_department = """
         SELECT d.name, COUNT(q.id) as count
         FROM departments d
         LEFT JOIN quotes q ON d.id = q.department_id
-        {dept_filter if dept_filter else ""}
-        GROUP BY d.id, d.name
-    """)
+    """
+    if department_filter:
+        query_by_department += f" {department_filter}"
+    query_by_department += " GROUP BY d.id, d.name"
+
+    await cur.execute(query_by_department, tuple(params) if department_filter else None)
     stats['quotes_by_department'] = await cur.fetchall()
-    
-    await cur.execute(f"SELECT status, COUNT(*) as count FROM quotes {dept_filter} GROUP BY status")
+
+    status_query = "SELECT status, COUNT(*) as count FROM quotes"
+    status_params: List[Any] = []
+    if not is_admin:
+        status_query += " WHERE department_id = (SELECT department_id FROM users WHERE id = %s)"
+        status_params.append(user['user_id'])
+    status_query += " GROUP BY status"
+
+    await cur.execute(status_query, tuple(status_params) if status_params else None)
     stats['quotes_by_status'] = await cur.fetchall()
-    
-    await cur.execute(f"""
-        SELECT DATE(created_at) as date, COUNT(*) as count
-        FROM quotes
-        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
-        {dept_filter}
-        GROUP BY DATE(created_at)
-        ORDER BY date
-    """)
+
+    recent_query = [
+        "SELECT DATE(created_at) as date, COUNT(*) as count",
+        "FROM quotes",
+        "WHERE created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)",
+    ]
+    recent_params: List[Any] = []
+    if not is_admin:
+        recent_query.append("AND department_id = (SELECT department_id FROM users WHERE id = %s)")
+        recent_params.append(user['user_id'])
+    recent_query.append("GROUP BY DATE(created_at)")
+    recent_query.append("ORDER BY date")
+
+    await cur.execute("\n".join(recent_query), tuple(recent_params) if recent_params else None)
     stats['recent_quotes'] = await cur.fetchall()
-    
+
     return stats
 
 # ============ User Management ============
@@ -1336,9 +933,14 @@ async def delete_user(user_id: int, user = Depends(require_admin), cur = Depends
     return {"message": "User deleted successfully"}
 
 @api_router.put("/users/{user_id}/password")
-async def reset_user_password(user_id: int, new_password: str, user = Depends(require_admin), cur = Depends(get_db)):
+async def reset_user_password(
+    user_id: int,
+    request: PasswordResetRequest,
+    user = Depends(require_admin),
+    cur = Depends(get_db),
+):
     """Admin - Reset user password"""
-    password_hash = hash_password(new_password)
+    password_hash = hash_password(request.new_password)
     await cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
     return {"message": "Password reset successfully"}
 
@@ -1397,13 +999,7 @@ async def restore_quote_version(quote_id: int, version: int, user = Depends(get_
     if not version_data:
         raise HTTPException(status_code=404, detail="Version not found")
     
-    # Save current state as new version
-    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
-    current = await cur.fetchone()
-    await cur.execute(
-        "INSERT INTO quote_versions (quote_id, version, data, changed_by) VALUES (%s, %s, %s, %s)",
-        (quote_id, current['version'], json.dumps(current, default=str), user['user_id'])
-    )
+    await record_quote_snapshot(cur, quote_id, user['user_id'])
     
     # Restore the old version
     old_data = json.loads(version_data['data']) if isinstance(version_data['data'], str) else version_data['data']
@@ -1588,8 +1184,8 @@ app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=settings.cors_allow_credentials,
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1602,12 +1198,9 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup():
-    await init_db()
+    await init_db(settings)
     logger.info("Database initialized with enhanced schema")
 
 @app.on_event("shutdown")
 async def shutdown():
-    global pool
-    if pool:
-        pool.close()
-        await pool.wait_closed()
+    await close_pool()
