@@ -601,14 +601,22 @@ async def update_contact(contact_id: int, contact: ContactCreate, user = Depends
 
 @api_router.post("/quotes")
 async def create_quote(quote: QuoteCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    # Generate quote number
+    await cur.execute("SELECT MAX(id) as max_id FROM quotes")
+    result = await cur.fetchone()
+    next_id = (result['max_id'] or 0) + 1
+    quote_number = f"Q-{datetime.now().year}-{next_id:05d}"
+    
     await cur.execute(
-        """INSERT INTO quotes (name, client_name, department_id, description, equipment_markup_default, 
-           tax_rate, tax_enabled, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-        (quote.name, quote.client_name, quote.department_id, quote.description, 
+        """INSERT INTO quotes (quote_number, name, client_name, department_id, company_id, contact_id,
+           project_address, description, equipment_markup_default, tax_rate, tax_enabled, created_by) 
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (quote_number, quote.name, quote.client_name, quote.department_id, quote.company_id, 
+         quote.contact_id, quote.project_address, quote.description, 
          quote.equipment_markup_default, quote.tax_rate, quote.tax_enabled, user['user_id'])
     )
     quote_id = cur.lastrowid
-    return {"id": quote_id, "message": "Quote created successfully"}
+    return {"id": quote_id, "quote_number": quote_number, "message": "Quote created successfully"}
 
 @api_router.get("/quotes")
 async def get_quotes(user = Depends(get_current_user), cur = Depends(get_db)):
