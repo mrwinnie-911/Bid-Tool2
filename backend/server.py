@@ -137,11 +137,28 @@ class TemplateCreate(BaseModel):
 
 class VendorPriceCreate(BaseModel):
     item_name: str
-    cost: float  # Changed from price to cost
+    model: Optional[str] = None  # NEW: Model number
+    cost: float
     description: Optional[str] = None
     vendor: str
     department_id: Optional[int] = None
-    all_departments: bool = False  # NEW: Apply to all departments
+    all_departments: bool = False
+    expiration_date: Optional[str] = None  # NEW: Price expiration
+
+class CompanyCreate(BaseModel):
+    name: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
+
+class ContactCreate(BaseModel):
+    company_id: int
+    name: str
+    title: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    notes: Optional[str] = None
 
 # ============ Auth Helper Functions ============
 
