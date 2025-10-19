@@ -44,11 +44,15 @@ const QuoteBuilder = ({ user, onLogout }) => {
     name: '',
     client_name: '',
     department_id: '',
+    company_id: '',
+    contact_id: '',
+    project_address: '',
     description: '',
     equipment_markup_default: 20,
-    tax_rate: 0,
-    tax_enabled: false,
-    status: 'draft'
+    tax_rate: 8,
+    tax_enabled: true,
+    status: 'draft',
+    quote_number: ''
   });
 
   // Room form
