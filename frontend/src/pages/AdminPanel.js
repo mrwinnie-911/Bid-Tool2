@@ -34,6 +34,7 @@ const AdminPanel = ({ user, onLogout }) => {
     file: null,
     vendor: '',
     department_id: '',
+    all_departments: false,
     headers: [],
     mapping: {
       item_name: '',
@@ -41,6 +42,9 @@ const AdminPanel = ({ user, onLogout }) => {
       description: ''
     }
   });
+
+  const [editingUser, setEditingUser] = useState(null);
+  const [showEditUserDialog, setShowEditUserDialog] = useState(false);
 
   useEffect(() => {
     fetchDepartments();
