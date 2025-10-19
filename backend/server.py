@@ -1221,8 +1221,57 @@ async def import_vendor_prices_mapped(
 
 @api_router.get("/vendor-prices")
 async def get_vendor_prices(user = Depends(get_current_user), cur = Depends(get_db)):
-    await cur.execute("SELECT * FROM vendor_prices ORDER BY imported_at DESC LIMIT 100")
+    await cur.execute("""
+        SELECT * FROM vendor_prices 
+        WHERE expiration_date IS NULL OR expiration_date >= CURDATE()
+        ORDER BY vendor, item_name 
+        LIMIT 500
+    """)
     return await cur.fetchall()
+
+@api_router.get("/vendor-prices/grouped")
+async def get_vendor_prices_grouped(user = Depends(get_current_user), cur = Depends(get_db)):
+    """Get vendor prices grouped by vendor"""
+    await cur.execute("""
+        SELECT vendor, COUNT(*) as item_count,
+               MIN(imported_at) as first_import,
+               MAX(updated_at) as last_update
+        FROM vendor_prices
+        WHERE expiration_date IS NULL OR expiration_date >= CURDATE()
+        GROUP BY vendor
+        ORDER BY vendor
+    """)
+    vendors = await cur.fetchall()
+    
+    result = []
+    for vendor_info in vendors:
+        await cur.execute("""
+            SELECT * FROM vendor_prices 
+            WHERE vendor = %s AND (expiration_date IS NULL OR expiration_date >= CURDATE())
+            ORDER BY item_name
+        """, (vendor_info['vendor'],))
+        items = await cur.fetchall()
+        result.append({
+            "vendor": vendor_info['vendor'],
+            "item_count": vendor_info['item_count'],
+            "first_import": vendor_info['first_import'],
+            "last_update": vendor_info['last_update'],
+            "items": items
+        })
+    
+    return result
+
+@api_router.put("/vendor-prices/{price_id}")
+async def update_vendor_price(price_id: int, price_data: VendorPriceCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Update an existing vendor price"""
+    await cur.execute(
+        """UPDATE vendor_prices SET item_name = %s, model = %s, cost = %s, description = %s, 
+           vendor = %s, expiration_date = %s, updated_at = NOW()
+           WHERE id = %s""",
+        (price_data.item_name, price_data.model, price_data.cost, price_data.description,
+         price_data.vendor, price_data.expiration_date, price_id)
+    )
+    return {"message": "Vendor price updated successfully"}
 
 @api_router.get("/vendor-prices/search")
 async def search_vendor_prices(q: str, user = Depends(get_current_user), cur = Depends(get_db)):
