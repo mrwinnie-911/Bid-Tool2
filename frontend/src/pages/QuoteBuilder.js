@@ -167,16 +167,26 @@ const QuoteBuilder = ({ user, onLogout }) => {
       const response = await axios.get(`${API}/quotes/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      const q = response.data;
       setQuoteData({
-        name: response.data.name,
-        client_name: response.data.client_name,
-        department_id: response.data.department_id.toString(),
-        description: response.data.description || '',
-        equipment_markup_default: response.data.equipment_markup_default || 20,
-        tax_rate: response.data.tax_rate || 0,
-        tax_enabled: response.data.tax_enabled || false,
-        status: response.data.status
+        name: q.name,
+        client_name: q.client_name,
+        department_id: q.department_id.toString(),
+        company_id: q.company_id?.toString() || '',
+        contact_id: q.contact_id?.toString() || '',
+        project_address: q.project_address || '',
+        description: q.description || '',
+        equipment_markup_default: q.equipment_markup_default || 20,
+        tax_rate: q.tax_rate || 8,
+        tax_enabled: q.tax_enabled !== undefined ? q.tax_enabled : true,
+        status: q.status,
+        quote_number: q.quote_number || ''
       });
+      
+      // Fetch contacts if company selected
+      if (q.company_id) {
+        fetchContacts(q.company_id);
+      }
     } catch (error) {
       toast.error('Failed to load quote');
     }
