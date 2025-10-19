@@ -78,10 +78,13 @@ class QuoteCreate(BaseModel):
     name: str
     client_name: str
     department_id: int
+    company_id: Optional[int] = None  # NEW: Company
+    contact_id: Optional[int] = None  # NEW: Point of Contact
+    project_address: Optional[str] = None  # NEW: Project address
     description: Optional[str] = None
     equipment_markup_default: float = 20.0  # Default 20% markup
-    tax_rate: float = 0.0
-    tax_enabled: bool = False
+    tax_rate: float = 8.0  # NEW: Default 8%
+    tax_enabled: bool = True  # NEW: Enabled by default
 
 class QuoteUpdate(BaseModel):
     name: Optional[str] = None
