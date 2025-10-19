@@ -112,6 +112,7 @@ class SystemCreate(BaseModel):
 class EquipmentCreate(BaseModel):
     system_id: int
     item_name: str
+    model: Optional[str] = None  # NEW: Model number
     description: Optional[str] = None
     quantity: int
     unit_cost: float  # What you pay
