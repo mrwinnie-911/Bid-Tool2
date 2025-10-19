@@ -337,6 +337,7 @@ async def init_db():
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     system_id INT NOT NULL,
                     item_name VARCHAR(255) NOT NULL,
+                    model VARCHAR(255),
                     description TEXT,
                     quantity INT NOT NULL,
                     unit_cost DECIMAL(10, 2) NOT NULL,
