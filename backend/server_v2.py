@@ -400,3 +400,337 @@ async def init_db():
                     await cur.execute("INSERT INTO departments (name) VALUES (%s)", (dept_name,))
 
 print("Database initialization script created successfully!")
+# ============ Auth Routes ============
+
+@api_router.post("/auth/register")
+async def register(user_data: UserCreate, current_user = Depends(require_admin), cur = Depends(get_db)):
+    """Admin only - register new users"""
+    password_hash = hash_password(user_data.password)
+    try:
+        await cur.execute(
+            "INSERT INTO users (username, password_hash, role, department_id) VALUES (%s, %s, %s, %s)",
+            (user_data.username, password_hash, user_data.role, user_data.department_id)
+        )
+        return {"message": "User created successfully"}
+    except aiomysql.IntegrityError:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+@api_router.post("/auth/login")
+async def login(credentials: UserLogin, cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM users WHERE username = %s", (credentials.username,))
+    user = await cur.fetchone()
+    
+    if not user or not verify_password(credentials.password, user['password_hash']):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    token = create_token(user['id'], user['username'], user['role'])
+    return {
+        "token": token,
+        "user": {
+            "id": user['id'],
+            "username": user['username'],
+            "role": user['role'],
+            "department_id": user['department_id']
+        }
+    }
+
+@api_router.get("/auth/me")
+async def get_me(user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT id, username, role, department_id, created_at FROM users WHERE id = %s", (user['user_id'],))
+    user_data = await cur.fetchone()
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_data
+
+# ============ Department Routes ============
+
+@api_router.post("/departments")
+async def create_department(dept: DepartmentCreate, user = Depends(require_admin), cur = Depends(get_db)):
+    try:
+        await cur.execute("INSERT INTO departments (name) VALUES (%s)", (dept.name,))
+        return {"message": "Department created successfully"}
+    except aiomysql.IntegrityError:
+        raise HTTPException(status_code=400, detail="Department already exists")
+
+@api_router.get("/departments")
+async def get_departments(user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM departments ORDER BY name")
+    return await cur.fetchall()
+
+@api_router.put("/departments/{dept_id}")
+async def update_department(dept_id: int, dept: DepartmentCreate, user = Depends(require_admin), cur = Depends(get_db)):
+    await cur.execute("UPDATE departments SET name = %s WHERE id = %s", (dept.name, dept_id))
+    return {"message": "Department updated successfully"}
+
+@api_router.delete("/departments/{dept_id}")
+async def delete_department(dept_id: int, user = Depends(require_admin), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM departments WHERE id = %s", (dept_id,))
+    return {"message": "Department deleted successfully"}
+
+# ============ Quote Routes ============
+
+@api_router.post("/quotes")
+async def create_quote(quote: QuoteCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """INSERT INTO quotes (name, client_name, department_id, description, equipment_markup_default, 
+           tax_rate, tax_enabled, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (quote.name, quote.client_name, quote.department_id, quote.description, 
+         quote.equipment_markup_default, quote.tax_rate, quote.tax_enabled, user['user_id'])
+    )
+    quote_id = cur.lastrowid
+    return {"id": quote_id, "message": "Quote created successfully"}
+
+@api_router.get("/quotes")
+async def get_quotes(user = Depends(get_current_user), cur = Depends(get_db)):
+    if user['role'] == 'admin':
+        await cur.execute("""
+            SELECT q.*, d.name as department_name, u.username as created_by_username
+            FROM quotes q
+            LEFT JOIN departments d ON q.department_id = d.id
+            LEFT JOIN users u ON q.created_by = u.id
+            ORDER BY q.updated_at DESC
+        """)
+    else:
+        await cur.execute("""
+            SELECT q.*, d.name as department_name, u.username as created_by_username
+            FROM quotes q
+            LEFT JOIN departments d ON q.department_id = d.id
+            LEFT JOIN users u ON q.created_by = u.id
+            WHERE q.department_id = (SELECT department_id FROM users WHERE id = %s)
+            ORDER BY q.updated_at DESC
+        """, (user['user_id'],))
+    
+    return await cur.fetchall()
+
+@api_router.get("/quotes/{quote_id}")
+async def get_quote(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("""
+        SELECT q.*, d.name as department_name, u.username as created_by_username
+        FROM quotes q
+        LEFT JOIN departments d ON q.department_id = d.id
+        LEFT JOIN users u ON q.created_by = u.id
+        WHERE q.id = %s
+    """, (quote_id,))
+    quote = await cur.fetchone()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return quote
+
+@api_router.put("/quotes/{quote_id}")
+async def update_quote(quote_id: int, quote_data: QuoteUpdate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT version FROM quotes WHERE id = %s", (quote_id,))
+    current = await cur.fetchone()
+    if not current:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    # Save version
+    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
+    quote_snapshot = await cur.fetchone()
+    await cur.execute(
+        "INSERT INTO quote_versions (quote_id, version, data, changed_by) VALUES (%s, %s, %s, %s)",
+        (quote_id, current['version'], json.dumps(quote_snapshot, default=str), user['user_id'])
+    )
+    
+    # Update quote
+    update_fields = []
+    values = []
+    for field, value in quote_data.model_dump(exclude_unset=True).items():
+        update_fields.append(f"{field} = %s")
+        values.append(value)
+    
+    if update_fields:
+        update_fields.append("version = version + 1")
+        values.append(quote_id)
+        await cur.execute(
+            f"UPDATE quotes SET {', '.join(update_fields)} WHERE id = %s",
+            tuple(values)
+        )
+    
+    return {"message": "Quote updated successfully"}
+
+@api_router.delete("/quotes/{quote_id}")
+async def delete_quote(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM quotes WHERE id = %s", (quote_id,))
+    return {"message": "Quote deleted successfully"}
+
+# ============ Room Routes ============
+
+@api_router.post("/rooms")
+async def create_room(room: RoomCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "INSERT INTO rooms (quote_id, name, quantity) VALUES (%s, %s, %s)",
+        (room.quote_id, room.name, room.quantity)
+    )
+    return {"id": cur.lastrowid, "message": "Room created successfully"}
+
+@api_router.get("/rooms/quote/{quote_id}")
+async def get_rooms_by_quote(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM rooms WHERE quote_id = %s", (quote_id,))
+    return await cur.fetchall()
+
+@api_router.put("/rooms/{room_id}")
+async def update_room(room_id: int, room: RoomCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE rooms SET name = %s, quantity = %s WHERE id = %s",
+        (room.name, room.quantity, room_id)
+    )
+    return {"message": "Room updated successfully"}
+
+@api_router.delete("/rooms/{room_id}")
+async def delete_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM rooms WHERE id = %s", (room_id,))
+    return {"message": "Room deleted successfully"}
+
+# ============ System Routes (NEW) ============
+
+@api_router.post("/systems")
+async def create_system(system: SystemCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "INSERT INTO systems (room_id, name, description) VALUES (%s, %s, %s)",
+        (system.room_id, system.name, system.description)
+    )
+    return {"id": cur.lastrowid, "message": "System created successfully"}
+
+@api_router.get("/systems/room/{room_id}")
+async def get_systems_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM systems WHERE room_id = %s", (room_id,))
+    return await cur.fetchall()
+
+@api_router.put("/systems/{system_id}")
+async def update_system(system_id: int, system: SystemCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        "UPDATE systems SET name = %s, description = %s WHERE id = %s",
+        (system.name, system.description, system_id)
+    )
+    return {"message": "System updated successfully"}
+
+@api_router.delete("/systems/{system_id}")
+async def delete_system(system_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM systems WHERE id = %s", (system_id,))
+    return {"message": "System deleted successfully"}
+
+# ============ Equipment Routes (UPDATED) ============
+
+@api_router.post("/equipment")
+async def create_equipment(equip: EquipmentCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """INSERT INTO equipment (system_id, item_name, description, quantity, unit_cost, 
+           markup_override, vendor, tax_exempt) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+        (equip.system_id, equip.item_name, equip.description, equip.quantity, 
+         equip.unit_cost, equip.markup_override, equip.vendor, equip.tax_exempt)
+    )
+    return {"id": cur.lastrowid, "message": "Equipment created successfully"}
+
+@api_router.get("/equipment/system/{system_id}")
+async def get_equipment_by_system(system_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    # Get quote's default markup
+    await cur.execute("""
+        SELECT q.equipment_markup_default 
+        FROM quotes q
+        JOIN rooms r ON q.id = r.quote_id
+        JOIN systems s ON r.id = s.room_id
+        WHERE s.id = %s
+    """, (system_id,))
+    quote_data = await cur.fetchone()
+    default_markup = float(quote_data['equipment_markup_default']) if quote_data else 20.0
+    
+    await cur.execute("SELECT * FROM equipment WHERE system_id = %s", (system_id,))
+    equipment = await cur.fetchall()
+    
+    # Calculate prices with markup
+    for eq in equipment:
+        markup = float(eq['markup_override']) if eq['markup_override'] else default_markup
+        unit_cost = float(eq['unit_cost'])
+        unit_price = unit_cost * (1 + markup / 100)
+        eq['unit_price'] = round(unit_price, 2)
+        eq['total_cost'] = round(unit_cost * eq['quantity'], 2)
+        eq['total_price'] = round(unit_price * eq['quantity'], 2)
+        eq['margin_dollars'] = round((unit_price - unit_cost) * eq['quantity'], 2)
+        eq['margin_percent'] = round(markup, 2)
+    
+    return equipment
+
+@api_router.put("/equipment/{equip_id}")
+async def update_equipment(equip_id: int, equip: EquipmentCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE equipment SET item_name = %s, description = %s, quantity = %s, unit_cost = %s,
+           markup_override = %s, vendor = %s, tax_exempt = %s WHERE id = %s""",
+        (equip.item_name, equip.description, equip.quantity, equip.unit_cost,
+         equip.markup_override, equip.vendor, equip.tax_exempt, equip_id)
+    )
+    return {"message": "Equipment updated successfully"}
+
+@api_router.delete("/equipment/{equip_id}")
+async def delete_equipment(equip_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM equipment WHERE id = %s", (equip_id,))
+    return {"message": "Equipment deleted successfully"}
+
+# ============ Labor Routes (UPDATED) ============
+
+@api_router.post("/labor")
+async def create_labor(labor: LaborCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """INSERT INTO labor (room_id, role_name, cost_rate, sell_rate, hours, department_id) 
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (labor.room_id, labor.role_name, labor.cost_rate, labor.sell_rate, labor.hours, labor.department_id)
+    )
+    return {"id": cur.lastrowid, "message": "Labor created successfully"}
+
+@api_router.get("/labor/room/{room_id}")
+async def get_labor_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM labor WHERE room_id = %s", (room_id,))
+    labor = await cur.fetchall()
+    
+    # Calculate totals and margins
+    for lb in labor:
+        lb['total_cost'] = round(float(lb['cost_rate']) * float(lb['hours']), 2)
+        lb['total_price'] = round(float(lb['sell_rate']) * float(lb['hours']), 2)
+        lb['margin_dollars'] = round(lb['total_price'] - lb['total_cost'], 2)
+        lb['margin_percent'] = round((lb['margin_dollars'] / lb['total_cost'] * 100) if lb['total_cost'] > 0 else 0, 2)
+    
+    return labor
+
+@api_router.put("/labor/{labor_id}")
+async def update_labor(labor_id: int, labor: LaborCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE labor SET role_name = %s, cost_rate = %s, sell_rate = %s, hours = %s,
+           department_id = %s WHERE id = %s""",
+        (labor.role_name, labor.cost_rate, labor.sell_rate, labor.hours, labor.department_id, labor_id)
+    )
+    return {"message": "Labor updated successfully"}
+
+@api_router.delete("/labor/{labor_id}")
+async def delete_labor(labor_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM labor WHERE id = %s", (labor_id,))
+    return {"message": "Labor deleted successfully"}
+
+# ============ Service Routes (UPDATED) ============
+
+@api_router.post("/services")
+async def create_service(service: ServiceCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """INSERT INTO services (room_id, service_name, percentage_of_equipment, department_id, description) 
+           VALUES (%s, %s, %s, %s, %s)""",
+        (service.room_id, service.service_name, service.percentage_of_equipment, service.department_id, service.description)
+    )
+    return {"id": cur.lastrowid, "message": "Service created successfully"}
+
+@api_router.get("/services/room/{room_id}")
+async def get_services_by_room(room_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("SELECT * FROM services WHERE room_id = %s", (room_id,))
+    return await cur.fetchall()
+
+@api_router.put("/services/{service_id}")
+async def update_service(service_id: int, service: ServiceCreate, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute(
+        """UPDATE services SET service_name = %s, percentage_of_equipment = %s, 
+           department_id = %s, description = %s WHERE id = %s""",
+        (service.service_name, service.percentage_of_equipment, service.department_id, service.description, service_id)
+    )
+    return {"message": "Service updated successfully"}
+
+@api_router.delete("/services/{service_id}")
+async def delete_service(service_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    await cur.execute("DELETE FROM services WHERE id = %s", (service_id,))
+    return {"message": "Service deleted successfully"}
+
