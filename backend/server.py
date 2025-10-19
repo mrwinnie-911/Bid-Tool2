@@ -1166,6 +1166,7 @@ async def import_vendor_prices_mapped(
     vendor: str = Form(...),
     department_id: Optional[str] = Form(None),
     all_departments: str = Form("false"),
+    expiration_date: Optional[str] = Form(None),
     user = Depends(get_current_user),
     cur = Depends(get_db)
 ):
@@ -1184,13 +1185,16 @@ async def import_vendor_prices_mapped(
         
         for row_num, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             try:
-                # Get mapped columns
                 item_name = None
+                model = None
                 cost = None
                 description = None
                 
                 if mapping_dict.get('item_name') and mapping_dict['item_name'] in headers:
                     item_name = row[headers.index(mapping_dict['item_name'])]
+                
+                if mapping_dict.get('model') and mapping_dict['model'] in headers:
+                    model = row[headers.index(mapping_dict['model'])]
                 
                 if mapping_dict.get('price') and mapping_dict['price'] in headers:
                     cost = row[headers.index(mapping_dict['price'])]
@@ -1200,10 +1204,11 @@ async def import_vendor_prices_mapped(
                 
                 if item_name and cost:
                     await cur.execute(
-                        """INSERT INTO vendor_prices (item_name, cost, description, vendor, department_id, all_departments) 
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
-                        (str(item_name), float(cost), str(description) if description else None, 
-                         vendor, dept_id, all_depts)
+                        """INSERT INTO vendor_prices (item_name, model, cost, description, vendor, 
+                           department_id, all_departments, expiration_date) 
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (str(item_name), str(model) if model else None, float(cost), 
+                         str(description) if description else None, vendor, dept_id, all_depts, expiration_date)
                     )
                     imported_count += 1
             except Exception as e:
@@ -1212,7 +1217,7 @@ async def import_vendor_prices_mapped(
         
         result = {"message": f"Imported {imported_count} items successfully"}
         if errors:
-            result['errors'] = errors[:10]  # Return first 10 errors
+            result['errors'] = errors[:10]
         
         return result
     except Exception as e:
