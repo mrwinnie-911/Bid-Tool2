@@ -133,6 +133,34 @@ const QuoteBuilder = ({ user, onLogout }) => {
     }
   };
 
+  const fetchCompanies = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API}/companies`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCompanies(response.data);
+    } catch (error) {
+      console.error('Failed to fetch companies');
+    }
+  };
+
+  const fetchContacts = async (companyId) => {
+    if (!companyId) {
+      setContacts([]);
+      return;
+    }
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API}/contacts/company/${companyId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setContacts(response.data);
+    } catch (error) {
+      console.error('Failed to fetch contacts');
+    }
+  };
+
   const fetchQuote = async () => {
     try {
       const token = localStorage.getItem('token');
