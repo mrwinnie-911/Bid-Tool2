@@ -138,9 +138,10 @@ class TemplateCreate(BaseModel):
 class VendorPriceCreate(BaseModel):
     item_name: str
     cost: float  # Changed from price to cost
-    description: Optional[str]
+    description: Optional[str] = None
     vendor: str
-    department_id: Optional[int]
+    department_id: Optional[int] = None
+    all_departments: bool = False  # NEW: Apply to all departments
 
 # ============ Auth Helper Functions ============
 
