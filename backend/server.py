@@ -90,6 +90,9 @@ class QuoteUpdate(BaseModel):
     name: Optional[str] = None
     client_name: Optional[str] = None
     department_id: Optional[int] = None
+    company_id: Optional[int] = None
+    contact_id: Optional[int] = None
+    project_address: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
     equipment_markup_default: Optional[float] = None
