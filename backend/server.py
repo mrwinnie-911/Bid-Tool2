@@ -622,18 +622,24 @@ async def create_quote(quote: QuoteCreate, user = Depends(get_current_user), cur
 async def get_quotes(user = Depends(get_current_user), cur = Depends(get_db)):
     if user['role'] == 'admin':
         await cur.execute("""
-            SELECT q.*, d.name as department_name, u.username as created_by_username
+            SELECT q.*, d.name as department_name, u.username as created_by_username,
+                   co.name as company_name, c.name as contact_name
             FROM quotes q
             LEFT JOIN departments d ON q.department_id = d.id
             LEFT JOIN users u ON q.created_by = u.id
+            LEFT JOIN companies co ON q.company_id = co.id
+            LEFT JOIN contacts c ON q.contact_id = c.id
             ORDER BY q.updated_at DESC
         """)
     else:
         await cur.execute("""
-            SELECT q.*, d.name as department_name, u.username as created_by_username
+            SELECT q.*, d.name as department_name, u.username as created_by_username,
+                   co.name as company_name, c.name as contact_name
             FROM quotes q
             LEFT JOIN departments d ON q.department_id = d.id
             LEFT JOIN users u ON q.created_by = u.id
+            LEFT JOIN companies co ON q.company_id = co.id
+            LEFT JOIN contacts c ON q.contact_id = c.id
             WHERE q.department_id = (SELECT department_id FROM users WHERE id = %s)
             ORDER BY q.updated_at DESC
         """, (user['user_id'],))
@@ -643,10 +649,13 @@ async def get_quotes(user = Depends(get_current_user), cur = Depends(get_db)):
 @api_router.get("/quotes/{quote_id}")
 async def get_quote(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
     await cur.execute("""
-        SELECT q.*, d.name as department_name, u.username as created_by_username
+        SELECT q.*, d.name as department_name, u.username as created_by_username,
+               co.name as company_name, c.name as contact_name
         FROM quotes q
         LEFT JOIN departments d ON q.department_id = d.id
         LEFT JOIN users u ON q.created_by = u.id
+        LEFT JOIN companies co ON q.company_id = co.id
+        LEFT JOIN contacts c ON q.contact_id = c.id
         WHERE q.id = %s
     """, (quote_id,))
     quote = await cur.fetchone()
