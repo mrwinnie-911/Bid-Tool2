@@ -1136,6 +1136,247 @@ async def delete_user(user_id: int, user = Depends(require_admin), cur = Depends
     await cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
     return {"message": "User deleted successfully"}
 
+# ============ Enhanced User Management ============
+
+@api_router.put("/users/{user_id}")
+async def update_user(user_id: int, update_data: dict, user = Depends(require_admin), cur = Depends(get_db)):
+    """Admin - Update user role and department"""
+    fields = []
+    values = []
+    
+    if 'role' in update_data:
+        fields.append('role = %s')
+        values.append(update_data['role'])
+    if 'department_id' in update_data:
+        fields.append('department_id = %s')
+        values.append(update_data['department_id'])
+    
+    if fields:
+        values.append(user_id)
+        await cur.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = %s", tuple(values))
+    
+    return {"message": "User updated successfully"}
+
+# ============ Quote Version Management ============
+
+@api_router.get("/quotes/{quote_id}/versions")
+async def get_quote_versions(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Get all versions of a quote"""
+    await cur.execute("""
+        SELECT qv.id, qv.version, qv.created_at, u.username as changed_by_username,
+               qv.data
+        FROM quote_versions qv
+        LEFT JOIN users u ON qv.changed_by = u.id
+        WHERE qv.quote_id = %s
+        ORDER BY qv.version DESC
+    """, (quote_id,))
+    versions = await cur.fetchall()
+    
+    # Parse JSON data
+    for v in versions:
+        if isinstance(v['data'], str):
+            v['data'] = json.loads(v['data'])
+    
+    return versions
+
+@api_router.post("/quotes/{quote_id}/restore-version/{version}")
+async def restore_quote_version(quote_id: int, version: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Restore a quote to a specific version"""
+    # Get the version data
+    await cur.execute(
+        "SELECT data FROM quote_versions WHERE quote_id = %s AND version = %s",
+        (quote_id, version)
+    )
+    version_data = await cur.fetchone()
+    if not version_data:
+        raise HTTPException(status_code=404, detail="Version not found")
+    
+    # Save current state as new version
+    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
+    current = await cur.fetchone()
+    await cur.execute(
+        "INSERT INTO quote_versions (quote_id, version, data, changed_by) VALUES (%s, %s, %s, %s)",
+        (quote_id, current['version'], json.dumps(current, default=str), user['user_id'])
+    )
+    
+    # Restore the old version
+    old_data = json.loads(version_data['data']) if isinstance(version_data['data'], str) else version_data['data']
+    
+    await cur.execute("""
+        UPDATE quotes SET 
+        name = %s, client_name = %s, description = %s, 
+        equipment_markup_default = %s, tax_rate = %s, tax_enabled = %s,
+        version = version + 1
+        WHERE id = %s
+    """, (
+        old_data['name'], old_data['client_name'], old_data.get('description'),
+        old_data.get('equipment_markup_default', 20.0), 
+        old_data.get('tax_rate', 0.0), 
+        old_data.get('tax_enabled', False),
+        quote_id
+    ))
+    
+    return {"message": f"Quote restored to version {version}"}
+
+# ============ Quote Status Management ============
+
+@api_router.put("/quotes/{quote_id}/status")
+async def update_quote_status(quote_id: int, status: str, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Update quote status"""
+    valid_statuses = ['draft', 'pending', 'approved', 'rejected', 'revision']
+    if status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
+    
+    await cur.execute("UPDATE quotes SET status = %s WHERE id = %s", (status, quote_id))
+    return {"message": "Quote status updated successfully", "status": status}
+
+# ============ BOM Generation ============
+
+@api_router.get("/quotes/{quote_id}/bom")
+async def generate_bom(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Generate Bill of Materials"""
+    # Get quote
+    await cur.execute("SELECT * FROM quotes WHERE id = %s", (quote_id,))
+    quote = await cur.fetchone()
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    
+    bom = {
+        "quote_id": quote_id,
+        "quote_name": quote['name'],
+        "client_name": quote['client_name'],
+        "status": quote['status'],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "items": []
+    }
+    
+    # Get all rooms
+    await cur.execute("SELECT * FROM rooms WHERE quote_id = %s", (quote_id,))
+    rooms = await cur.fetchall()
+    
+    equipment_summary = {}  # Group by item for BOM
+    
+    for room in rooms:
+        room_qty = room['quantity']
+        
+        # Get systems
+        await cur.execute("SELECT * FROM systems WHERE room_id = %s", (room['id'],))
+        systems = await cur.fetchall()
+        
+        for system in systems:
+            # Get equipment
+            await cur.execute("SELECT * FROM equipment WHERE system_id = %s", (system['id'],))
+            equipment = await cur.fetchall()
+            
+            for eq in equipment:
+                total_qty = eq['quantity'] * room_qty
+                key = f"{eq['item_name']}|{eq['vendor'] or 'N/A'}"
+                
+                if key in equipment_summary:
+                    equipment_summary[key]['quantity'] += total_qty
+                else:
+                    equipment_summary[key] = {
+                        "item_name": eq['item_name'],
+                        "description": eq['description'],
+                        "vendor": eq['vendor'],
+                        "quantity": total_qty,
+                        "unit_cost": float(eq['unit_cost']),
+                        "locations": []
+                    }
+                
+                equipment_summary[key]['locations'].append({
+                    "room": room['name'],
+                    "system": system['name'],
+                    "quantity": eq['quantity'],
+                    "room_quantity": room_qty
+                })
+    
+    # Convert to list
+    bom['items'] = list(equipment_summary.values())
+    
+    # Calculate totals
+    bom['total_items'] = len(bom['items'])
+    bom['total_quantity'] = sum(item['quantity'] for item in bom['items'])
+    bom['total_cost'] = round(sum(item['quantity'] * item['unit_cost'] for item in bom['items']), 2)
+    
+    return bom
+
+@api_router.get("/quotes/{quote_id}/bom/export")
+async def export_bom_excel(quote_id: int, user = Depends(get_current_user), cur = Depends(get_db)):
+    """Export BOM as Excel file"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    
+    # Get BOM data
+    bom_data = await generate_bom(quote_id, user, cur)
+    
+    # Create Excel workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Bill of Materials"
+    
+    # Header
+    ws['A1'] = f"Bill of Materials - {bom_data['quote_name']}"
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A2'] = f"Client: {bom_data['client_name']}"
+    ws['A3'] = f"Generated: {bom_data['generated_at']}"
+    
+    # Column headers
+    headers = ['Item Name', 'Description', 'Vendor', 'Total Quantity', 'Unit Cost', 'Total Cost', 'Locations']
+    header_row = 5
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col)
+        cell.value = header
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+    
+    # Data rows
+    row = header_row + 1
+    for item in bom_data['items']:
+        ws.cell(row=row, column=1).value = item['item_name']
+        ws.cell(row=row, column=2).value = item['description']
+        ws.cell(row=row, column=3).value = item['vendor']
+        ws.cell(row=row, column=4).value = item['quantity']
+        ws.cell(row=row, column=5).value = item['unit_cost']
+        ws.cell(row=row, column=6).value = item['quantity'] * item['unit_cost']
+        
+        # Locations
+        locations_text = "; ".join([
+            f"{loc['room']} ({loc['system']}): {loc['quantity']}×{loc['room_quantity']}"
+            for loc in item['locations']
+        ])
+        ws.cell(row=row, column=7).value = locations_text
+        row += 1
+    
+    # Totals
+    row += 1
+    ws.cell(row=row, column=1).value = "TOTALS"
+    ws.cell(row=row, column=1).font = Font(bold=True)
+    ws.cell(row=row, column=4).value = bom_data['total_quantity']
+    ws.cell(row=row, column=4).font = Font(bold=True)
+    ws.cell(row=row, column=6).value = bom_data['total_cost']
+    ws.cell(row=row, column=6).font = Font(bold=True)
+    
+    # Adjust column widths
+    ws.column_dimensions['A'].width = 30
+    ws.column_dimensions['B'].width = 40
+    ws.column_dimensions['C'].width = 20
+    ws.column_dimensions['D'].width = 15
+    ws.column_dimensions['E'].width = 12
+    ws.column_dimensions['F'].width = 12
+    ws.column_dimensions['G'].width = 50
+    
+    # Save to BytesIO
+    excel_buffer = io.BytesIO()
+    wb.save(excel_buffer)
+    excel_buffer.seek(0)
+    
+    return StreamingResponse(
+        excel_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=BOM_Quote_{quote_id}.xlsx"}
+    )
+
 # Include router
 app.include_router(api_router)
 
